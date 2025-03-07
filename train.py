@@ -74,19 +74,45 @@ def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_pa
         # Log các số liệu lên wandb
         wandb.log({'epoch': epoch+1, 'train_loss': avg_loss, 'val_loss': avg_val_loss, 'lr': optimizer.param_groups[0]['lr']})
         
-        # Log ảnh mẫu lên wandb mỗi log_interval epoch
+        # Log ảnh mẫu lên wandb mỗi log_interval epoch (5 ảnh từ train và 5 ảnh từ validation)
         if (epoch + 1) % log_interval == 0:
             with torch.no_grad():
+                # Lấy 5 ảnh mẫu từ tập train
                 sample_data = next(iter(train_dl))
                 L_sample = sample_data['L'].to(DEVICE)
                 ab_sample = sample_data['ab'].to(DEVICE)
                 fake_ab_sample = net_G(L_sample)
                 
-                # Lấy 5 ảnh mẫu từ tập train
-                real_images = [wandb.Image(lab_to_rgb(L_sample[i].cpu().numpy(), ab_sample[i].cpu().numpy()), caption=f"Real {i}") for i in range(5)]
-                fake_images = [wandb.Image(lab_to_rgb(L_sample[i].cpu().numpy(), fake_ab_sample[i].cpu().numpy()), caption=f"Fake {i}") for i in range(5)]
+                real_images_train = [wandb.Image(lab_to_rgb(L_sample[i].cpu().numpy(), ab_sample[i].cpu().numpy()),
+                                                 caption=f"GT Train {i}") for i in range(5)]
+                fake_images_train = [wandb.Image(lab_to_rgb(L_sample[i].cpu().numpy(), fake_ab_sample[i].cpu().numpy()),
+                                                 caption=f"Predicted Train {i}") for i in range(5)]
                 
-                wandb.log({'Generated Images': fake_images, 'Ground Truth Images': real_images})
+                # Lấy 5 ảnh mẫu từ tập validation
+                val_sample = next(iter(val_dl))
+                L_val = val_sample['L'].to(DEVICE)
+                ab_val = val_sample['ab'].to(DEVICE)
+                fake_ab_val = net_G(L_val)
+                
+                real_images_val = [wandb.Image(lab_to_rgb(L_val[i].cpu().numpy(), ab_val[i].cpu().numpy()),
+                                               caption=f"GT Val {i}") for i in range(5)]
+                fake_images_val = [wandb.Image(lab_to_rgb(L_val[i].cpu().numpy(), fake_ab_val[i].cpu().numpy()),
+                                               caption=f"Predicted Val {i}") for i in range(5)]
+                
+                wandb.log({
+                    'epoch': epoch+1,
+                    'train_loss': avg_loss,
+                    'val_loss': avg_val_loss,
+                    'lr': optimizer.param_groups[0]['lr'],
+                    'Ground Truth Train': real_images_train,
+                    'Predicted Train': fake_images_train,
+                    'Ground Truth Val': real_images_val,
+                    'Predicted Val': fake_images_val
+                })
+    
+    print("Training complete.")
+    wandb.finish()
+
     
     wandb.finish()
 
