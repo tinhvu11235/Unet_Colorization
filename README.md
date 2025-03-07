@@ -26,10 +26,21 @@ Or install them manually:
 ```bash
 pip install torch torchvision numpy scikit-image matplotlib tqdm wandb gdown
 ```
-
 ---
 
-## 🚀 **How to Use**
+## 🚀 **How to Use ?**
+### **Train from Scratch**
+```bash
+git clone https://github.com/tinhvu11235/Unet_Colorization.git
+```
+```bash
+python demo_release.py -i path_gray_image -o path_output
+```
+
+---
+---
+
+## 🚀 **How to Training ?**
 ### **Train from Scratch**
 ```bash
 python main.py --mode scratch
