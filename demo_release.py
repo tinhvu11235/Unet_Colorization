@@ -133,7 +133,7 @@ def reconstruct_rgb(L_channel_original, predicted_AB):
     rgb_image = cv2.cvtColor(lab_image, cv2.COLOR_LAB2RGB)
     return rgb_image
 
-def main(input_path, output_path):
+def main(input_path, output_dir):
     # Download checkpoint model từ Google Drive nếu chưa có
     model_url = 'https://drive.google.com/uc?id=1dD7PQt1RB-IqNVJFHlnsG9MdkmdDuRxH'
     model_path = 'model.pth'
@@ -150,6 +150,13 @@ def main(input_path, output_path):
     
     # Hồi tạo ảnh RGB từ ảnh LAB (với L gốc và AB dự đoán)
     predicted_rgb = reconstruct_rgb(L_channel_original, predicted_AB)
+    
+    # Kiểm tra và tạo thư mục output nếu chưa tồn tại
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # Đặt tên ảnh kết quả là unet-predict.jpg
+    output_path = os.path.join(output_dir, "unet-predict.jpg")
     
     # Lưu ảnh kết quả
     predicted_image = Image.fromarray(predicted_rgb)
@@ -170,8 +177,7 @@ def main(input_path, output_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Colorize images using a pretrained model")
-    parser.add_argument('input_path', type=str, help="Path to the input image")
-    parser.add_argument('output_path', type=str, help="Path to save the output image")
+    parser.add_argument('-i', '--input', type=str, required=True, help="Path to the input image")
+    parser.add_argument('-o', '--output', type=str, required=True, help="Output directory to save the predicted image")
     args = parser.parse_args()
-
-    main(args.input_path, args.output_path)
+    main(args.input, args.output)
