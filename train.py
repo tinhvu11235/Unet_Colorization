@@ -75,7 +75,7 @@ def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_pa
 
     # Khởi tạo WandB với `resume=True` và sử dụng run_id (nếu có)
     if run_id:
-        wandb.init(project="image-colorization", name="Unet", id=run_id, resume=True)
+        wandb.init(project="image-colorization", name="Unet", id=run_id, resume="must")
     else:
         wandb.init(project="image-colorization", name="Unet", resume=False)
 
