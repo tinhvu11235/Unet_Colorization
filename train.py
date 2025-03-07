@@ -169,12 +169,12 @@ def train_from_scratch(cfg):
     train_model(net_G, train_dl, val_dl, epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"])
 
 # Tiếp tục huấn luyện từ checkpoint
-def continue_training(cfg):
+def continue_training(cfg, path):
     # Khởi tạo WandB và tiếp tục từ run cũ nếu có
     run = wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], resume=True)
     
     # Tải artifact về thư mục hiện hành (cùng thư mục với train.py)
-    artifact = run.use_artifact(cfg["MODEL_ARTIFACT"], type="model")
+    artifact = run.use_artifact(path, type="model")
     artifact_dir = artifact.download(root=".")  # artifact_dir sẽ có tên như artifact, ví dụ "vae-model-epoch-69:v0"
     print(f"Artifact downloaded to: {artifact_dir}")
     
