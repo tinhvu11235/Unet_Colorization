@@ -184,7 +184,7 @@ def continue_training(cfg, path):
         raise ValueError("No checkpoint file found in artifact directory.")
 
     checkpoint_path = os.path.join(artifact_dir, checkpoint_files[0])
-    
+    net_G = UNetGenerator().to(DEVICE)
     # Tạo dataloader từ dataset
     train_dl, val_dl = create_dataloaders(
         cfg["TRAIN_DATASET_PATH"],
