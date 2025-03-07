@@ -13,9 +13,9 @@ TRAIN_FROM_SCRATCH = {
     "EPOCHS": 70,
     "LR": 4e-4,
     "NUM_WORKERS": 4,
-    "TRAIN_SIZE": 8000,
-    "VAL_SIZE": 1000,
-    "WANDB_PROJECT": "image-colorization",
+    "TRAIN_SIZE": 118000,
+    "VAL_SIZE": 5000,
+    "WANDB_PROJECT": "image-colorization-123k-img",
     "WANDB_RUN_NAME": "Unet",
 }
 
@@ -27,11 +27,10 @@ CONTINUE_TRAINING = {
     "EPOCHS": 70,
     "LR": 4e-4,
     "NUM_WORKERS": 4,
-    "TRAIN_SIZE": 8000,
-    "VAL_SIZE": 1000,
-    "WANDB_PROJECT": "image-colorization",
+    "TRAIN_SIZE": 118000,
+    "VAL_SIZE": 5000,
+    "WANDB_PROJECT": "image-colorization-123k-img",
     "WANDB_RUN_NAME": "Unet",
-    "MODEL_ARTIFACT": "matbinhtinh20-f/vae-training-VAE-phase/vae-model-epoch-69:v0", 
 }
 
 
