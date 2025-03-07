@@ -36,7 +36,12 @@ git clone https://github.com/tinhvu11235/Unet_Colorization.git
 ```bash
 python demo_release.py -i path_gray_image -o path_output
 ```
+---
+## 🚀 **Some Results**
 
+![alt text](image.png)
+![alt text](image-3.png)
+![alt text](image-2.png)
 ---
 ---
 
