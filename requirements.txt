@@ -1,0 +1,12 @@
+gdown==5.2.0
+matplotlib==3.7.5
+numpy==1.26.4
+opencv_contrib_python==4.10.0.84
+opencv_python==4.10.0.84
+opencv_python_headless==4.10.0.84
+Pillow==11.1.0
+skimage==0.0
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+tqdm==4.67.1
+wandb==0.19.8
