@@ -1,9 +1,10 @@
-# config.py
 import torch
 
 # Thiết lập thiết bị
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
+
+
 
 # Cấu hình cho huấn luyện từ đầu
 TRAIN_FROM_SCRATCH = {
