@@ -13,9 +13,9 @@ TRAIN_FROM_SCRATCH = {
     "BATCH_SIZE": 32,
     "EPOCHS": 70,
     "LR": 4e-4,
-    "NUM_WORKERS": 118000,
-    "TRAIN_SIZE": 5000,
-    "VAL_SIZE": 10,
+    "NUM_WORKERS": 4,
+    "TRAIN_SIZE": 118000,
+    "VAL_SIZE": 5000,
     "WANDB_PROJECT": "image-colorization-123k-img",
     "WANDB_RUN_NAME": "Unet",
 }
