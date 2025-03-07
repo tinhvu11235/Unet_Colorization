@@ -12,15 +12,19 @@ class ColorizationDataset(Dataset):
         self.paths = paths
 
     def __getitem__(self, idx):
-        img = Image.open(self.paths[idx]).convert("RGB")
+
+        img = Image.open(self.paths[idx]).convert("RGB")  # Chuyển ảnh về RGB
+        img = np.array(img)  # Chuyển về NumPy array có shape (H, W, 3)
+
         if self.transform:
-            img = self.transform(img)
-        # Chuyển đổi sang không gian màu Lab
-        img_lab = rgb2lab(np.array(img)).astype("float32")
-        img_lab = torch.tensor(img_lab).permute(2, 0, 1)
-        # Chuẩn hóa các kênh
-        L = img_lab[[0], ...] / 50. - 1.
-        ab = img_lab[[1, 2], ...] / 110.
+            img = self.transform(Image.fromarray(img))  # PyTorch Tensor: (3, H, W)
+        
+        img_lab = rgb2lab(img.permute(1, 2, 0).numpy()).astype("float32")  # Chuyển sang LAB
+        img_lab = torch.tensor(img_lab).permute(2, 0, 1)  # Chuyển lại thành (3, H, W)
+
+        L = img_lab[[0], ...] / 50. - 1.  # Kênh L từ [0, 100] ➝ [-1, 1]
+        ab = img_lab[[1, 2], ...] / 110.  # Kênh a, b từ [-110, 110] ➝ [-1, 1]
+
         return {'L': L, 'ab': ab}
 
     def __len__(self):
