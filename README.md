@@ -38,7 +38,7 @@ This will train the UNet model from scratch using the configuration specified in
 
 ### **Continue Training from Checkpoint**
 ```bash
-python main.py --mode continue
+python main.py --mode continue --checkpoint_path "wandb_artifact_path"
 ```
 This will resume training from a previously saved checkpoint stored in **WandB Artifacts**.
 
@@ -51,15 +51,15 @@ Modify `config.py` to adjust the training parameters:
 TRAIN_FROM_SCRATCH = {
     "TRAIN_DATASET_PATH": "/path/to/train/",
     "VAL_DATASET_PATH": "/path/to/val/",
-    "BATCH_SIZE": 8,
+    "BATCH_SIZE": 32,
     "EPOCHS": 20,
     "LR": 4e-4,
     "NUM_WORKERS": 4,
-    "TRAIN_SIZE": 8000,
-    "VAL_SIZE": 1000,
+    "TRAIN_SIZE": 118000,
+    "VAL_SIZE": 5000,
     "WANDB_PROJECT": "image-colorization",
     "WANDB_RUN_NAME": "Unet",
-    "MODEL_ARTIFACT": None,  # No artifact when training from scratch
+
 }
 
 # Continue training configuration
@@ -70,11 +70,11 @@ CONTINUE_TRAINING = {
     "EPOCHS": 36,
     "LR": 4e-4,
     "NUM_WORKERS": 4,
-    "TRAIN_SIZE": 8000,
-    "VAL_SIZE": 1000,
+    "TRAIN_SIZE": 118000,
+    "VAL_SIZE": 5000,
     "WANDB_PROJECT": "image-colorization-123k",
     "WANDB_RUN_NAME": "Unet",
-    "MODEL_ARTIFACT": "matbinhtinh20-f/vae-training-VAE-phase/vae-model-epoch-69:v0",
+
 }
 ```
 
@@ -104,6 +104,7 @@ It will then load the **latest checkpoint** from the artifact directory and cont
 
 ## 📜 **License & Acknowledgements**
 📌 **Author**: tinhvu 
+
 📌 **This project is built using PyTorch and Weights & Biases to manage training 
 
 
