@@ -182,26 +182,8 @@ def continue_training(cfg):
     checkpoint_files = [f for f in os.listdir(artifact_dir) if f.endswith(".pth")]
     if not checkpoint_files:
         raise ValueError("No checkpoint file found in artifact directory.")
-    # Chọn file checkpoint đầu tiên (hoặc mới nhất nếu bạn có logic sắp xếp)
+
     checkpoint_path = os.path.join(artifact_dir, checkpoint_files[0])
-    
-    # Tải checkpoint
-    checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
-    
-    # Khởi tạo model, optimizer, scheduler
-    net_G = UNetGenerator().to(DEVICE)
-    optimizer = optim.Adam(net_G.parameters(), lr=cfg["LR"])
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=5)
-    
-    # Tải lại trạng thái từ checkpoint
-    net_G.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    epoch = checkpoint['epoch']
-    run_id = checkpoint['run_id']
-    
-    # Tiếp tục huấn luyện với run_id (sử dụng resume=True)
-    wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], id=run_id, resume=True)
     
     # Tạo dataloader từ dataset
     train_dl, val_dl = create_dataloaders(
