@@ -1,4 +1,3 @@
-# train.py
 import os
 import torch
 import torch.optim as optim
@@ -19,19 +18,52 @@ def lab_to_rgb(L, ab):
     Lab = np.concatenate([L, ab], axis=0).transpose(1, 2, 0)
     return lab2rgb(Lab)
 
+# Lưu checkpoint vào WandB artifact
+def save_checkpoint_as_artifact(epoch, model, optimizer, scheduler, run_id, artifact_name, artifact_type="model"):
+    checkpoint_file = f"checkpoint_epoch_{epoch}.pth"
+    torch.save({
+        'epoch': epoch + 1,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'run_id': run_id,
+    }, checkpoint_file)
+
+    # Tạo artifact trong WandB
+    artifact = wandb.Artifact(artifact_name, type=artifact_type)
+    artifact.add_file(checkpoint_file)
+
+    # Log artifact vào WandB
+    wandb.log_artifact(artifact)
+    print(f"Checkpoint saved and logged as artifact: {artifact_name}")
+
+    # Xóa checkpoint sau khi lưu vào artifact
+    os.remove(checkpoint_file)
+
+# Huấn luyện mô hình
 def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_path=None, checkpoint_template=CHECKPOINT_PATH_TEMPLATE):
     optimizer = optim.Adam(net_G.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=5)
     criterion = nn.L1Loss()
 
     start_epoch = 0
+    run_id = None
+
     if checkpoint_path and os.path.exists(checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
         net_G.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         start_epoch = checkpoint['epoch']
+        run_id = checkpoint['run_id']
         print(f"Resuming from epoch {start_epoch + 1}")
-    
+
+    # Khởi tạo WandB với `resume=True` và sử dụng run_id (nếu có)
+    if run_id:
+        wandb.init(project="image-colorization", name="Unet", id=run_id, resume=True)
+    else:
+        wandb.init(project="image-colorization", name="Unet", resume=False)
+
     for epoch in range(start_epoch, epochs):
         net_G.train()
         running_loss = 0.0
@@ -63,17 +95,12 @@ def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_pa
 
         scheduler.step(avg_val_loss)
 
-        # Lưu checkpoint
-        checkpoint_file = checkpoint_template.format(epoch=epoch+1)
-        torch.save({
-            'epoch': epoch + 1,
-            'model_state_dict': net_G.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-        }, checkpoint_file)
+        # Lưu checkpoint dưới dạng artifact sau mỗi epoch
+        save_checkpoint_as_artifact(epoch, net_G, optimizer, scheduler, wandb.run.id, checkpoint_template)
 
         # Log các số liệu lên wandb
         wandb.log({'epoch': epoch+1, 'train_loss': avg_loss, 'val_loss': avg_val_loss, 'lr': optimizer.param_groups[0]['lr']})
-        
+
         # Log ảnh mẫu lên wandb mỗi log_interval epoch (5 ảnh từ train và 5 ảnh từ validation)
         if (epoch + 1) % log_interval == 0:
             with torch.no_grad():
@@ -113,29 +140,37 @@ def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_pa
     print("Training complete.")
     wandb.finish()
 
-    
-    wandb.finish()
 
+# Hàm để huấn luyện từ đầu
 def train_from_scratch(cfg):
-    train_dl, val_dl = create_dataloaders(cfg["DATASET_PATH"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"], cfg["BATCH_SIZE"], cfg["NUM_WORKERS"])
+    train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"], cfg["BATCH_SIZE"], cfg["NUM_WORKERS"])
     net_G = UNetGenerator().to(DEVICE)
     net_G.apply(init_weights)
-    
-    wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"],
-               config={'learning_rate': cfg["LR"], 'epochs': cfg["EPOCHS"], 'batch_size': cfg["BATCH_SIZE"]})
+
+    wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config={
+        'learning_rate': cfg["LR"],
+        'epochs': cfg["EPOCHS"],
+        'batch_size': cfg["BATCH_SIZE"],
+    })
     train_model(net_G, train_dl, val_dl, epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"])
 
+# Hàm tải checkpoint từ URL và tiếp tục huấn luyện
 def download_checkpoint(checkpoint_url):
     checkpoint_path = "checkpoint.pth"
     gdown.download(checkpoint_url, checkpoint_path, quiet=False)
     print(f"Checkpoint downloaded to {checkpoint_path}")
     return checkpoint_path
 
+# Tiếp tục huấn luyện từ checkpoint
 def continue_training(cfg):
     # Tải checkpoint từ URL
     checkpoint_path = download_checkpoint(cfg["CHECKPOINT_URL"])
-    train_dl, val_dl = create_dataloaders(cfg["DATASET_PATH"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"], cfg["BATCH_SIZE"], cfg["NUM_WORKERS"])
+    train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"], cfg["BATCH_SIZE"], cfg["NUM_WORKERS"])
     net_G = UNetGenerator().to(DEVICE)
-    wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"],
-               config={'learning_rate': cfg["LR"], 'epochs': cfg["EPOCHS"], 'batch_size': cfg["BATCH_SIZE"]})
+    wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config={
+        'learning_rate': cfg["LR"],
+        'epochs': cfg["EPOCHS"],
+        'batch_size': cfg["BATCH_SIZE"],
+    }, resume=True)  # Resume from the previous run if it exists
+
     train_model(net_G, train_dl, val_dl, epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"], checkpoint_path=checkpoint_path)
