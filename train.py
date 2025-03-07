@@ -58,7 +58,7 @@ def save_checkpoint_as_artifact(epoch, model, optimizer, scheduler, run_id, arti
 # Huấn luyện mô hình
 def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_path=None):
     optimizer = optim.Adam(net_G.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=5)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=1)
     criterion = nn.L1Loss()
 
     start_epoch = 0
