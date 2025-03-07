@@ -7,7 +7,8 @@ print(f"Using device: {DEVICE}")
 
 # Cấu hình cho huấn luyện từ đầu
 TRAIN_FROM_SCRATCH = {
-    "DATASET_PATH": "/kaggle/input/cocostuff-10k-withoutgray/coco10k/images/train256",
+    "TRAIN_DATASET_PATH": "/kaggle/input/coco-stuff-256x256-image-only-split/CoCo_Stuff_256x256/train",
+    "VAL_DATASET_PATH": "/kaggle/input/coco-stuff-256x256-image-only-split/CoCo_Stuff_256x256/valid",
     "BATCH_SIZE": 64,
     "EPOCHS": 20,
     "LR": 4e-4,
@@ -20,15 +21,15 @@ TRAIN_FROM_SCRATCH = {
 
 # Cấu hình cho tiếp tục huấn luyện (sử dụng checkpoint từ wandb/drive)
 CONTINUE_TRAINING = {
-    "TRAIN_DATASET_PATH": "/path/to/train/data",
-    "VAL_DATASET_PATH": "/path/to/val/data",
-    "BATCH_SIZE": 32,
+    "TRAIN_DATASET_PATH": "/kaggle/input/coco-stuff-256x256-image-only-split/CoCo_Stuff_256x256/train",
+    "VAL_DATASET_PATH": "/kaggle/input/coco-stuff-256x256-image-only-split/CoCo_Stuff_256x256/valid",
+    "BATCH_SIZE": 64,
     "EPOCHS": 36,
     "LR": 4e-4,
     "NUM_WORKERS": 4,
-    "TRAIN_SIZE": 8000,
-    "VAL_SIZE": 1000,
-    "WANDB_PROJECT": "image-colorization-123k",
+    "TRAIN_SIZE": None,
+    "VAL_SIZE": None,
+    "WANDB_PROJECT": "image-colorization",
     "WANDB_RUN_NAME": "Unet",
     "MODEL_ARTIFACT": "matbinhtinh20-f/vae-training-VAE-phase/vae-model-epoch-69:v0", 
 }
