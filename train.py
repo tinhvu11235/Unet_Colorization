@@ -20,12 +20,15 @@ def lab_to_rgb(L, ab):
     return lab2rgb(Lab)
 
 # Lưu checkpoint vào WandB artifact
-def save_checkpoint_as_artifact(epoch, model, optimizer, scheduler, run_id, artifact_base_name="checkpoint_epoch", artifact_type="model"):
-    # 1️⃣ Tạo tên file và tên artifact hợp lệ
-    checkpoint_file = f"{artifact_base_name}_{epoch}.pth"  # checkpoint_epoch_10.pth
-    artifact_name = f"{artifact_base_name}_{epoch}"  # checkpoint_epoch_10
+import torch
+import wandb
+import os
 
-    # 2️⃣ Lưu checkpoint vào file
+def save_checkpoint_as_artifact(epoch, model, optimizer, scheduler, run_id, artifact_base_name="checkpoint"):
+    # Định dạng tên file checkpoint
+    checkpoint_file = f"{artifact_base_name}_epoch_{epoch}.pth"
+
+    # Lưu trạng thái vào file checkpoint
     torch.save({
         'epoch': epoch + 1,
         'model_state_dict': model.state_dict(),
@@ -34,20 +37,26 @@ def save_checkpoint_as_artifact(epoch, model, optimizer, scheduler, run_id, arti
         'run_id': run_id,
     }, checkpoint_file)
 
-    # 3️⃣ Tạo artifact trong WandB
-    artifact = wandb.Artifact(artifact_name, type=artifact_type)
-    artifact.add_file(checkpoint_file)  # Thêm file checkpoint vào artifact
+    # Định dạng tên artifact hợp lệ, không chứa .pth
+    artifact_name = f"{artifact_base_name}_epoch_{epoch}"
+    artifact = wandb.Artifact(name=artifact_name, type='model')
 
-    # 4️⃣ Log artifact vào WandB
+    # Thêm file checkpoint vào artifact
+    artifact.add_file(checkpoint_file)
+
+    # Log artifact vào WandB
     wandb.log_artifact(artifact)
     print(f"Checkpoint saved and logged as artifact: {artifact_name}")
 
-    # 5️⃣ Xóa file checkpoint sau khi lưu vào artifact
+    # Xóa file checkpoint sau khi log
     os.remove(checkpoint_file)
 
 
+
+
+
 # Huấn luyện mô hình
-def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_path=None, checkpoint_template=CHECKPOINT_PATH_TEMPLATE):
+def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_path=None):
     optimizer = optim.Adam(net_G.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=5)
     criterion = nn.L1Loss()
@@ -102,7 +111,7 @@ def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_pa
         scheduler.step(avg_val_loss)
 
         # Lưu checkpoint dưới dạng artifact sau mỗi epoch
-        save_checkpoint_as_artifact(epoch, net_G, optimizer, scheduler, wandb.run.id, checkpoint_template)
+        save_checkpoint_as_artifact(epoch, net_G, optimizer, scheduler, wandb.run.id)
 
         # Log các số liệu lên wandb
         wandb.log({'epoch': epoch+1, 'train_loss': avg_loss, 'val_loss': avg_val_loss, 'lr': optimizer.param_groups[0]['lr']})
