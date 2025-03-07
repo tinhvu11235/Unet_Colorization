@@ -105,7 +105,7 @@ It will then load the **latest checkpoint** from the artifact directory and cont
 ## 📜 **License & Acknowledgements**
 📌 **Author**: tinhvu 
 
-📌 **This project is built using PyTorch and Weights & Biases to manage training 
+📌 **This project is built using PyTorch and Weights & Biases to manage training**
 
 
 ## 🌟 **Happy Training!** 🚀🚀🚀
