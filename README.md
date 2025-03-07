@@ -39,9 +39,9 @@ python demo_release.py -i path_gray_image -o path_output
 ---
 ## 🚀 **Some Results**
 
-![alt text](image.png)
-![alt text](image-3.png)
-![alt text](image-2.png)
+![alt text](img/image.png)
+![alt text](img/image-3.png)
+![alt text](img/image-2.png)
 ---
 ---
 
