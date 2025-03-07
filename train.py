@@ -143,7 +143,7 @@ def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_pa
 
 # Hàm huấn luyện từ scratch (bắt đầu huấn luyện từ đầu)
 def train_from_scratch(cfg):
-    train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"], cfg["BATCH_SIZE"], cfg["NUM_WORKERS"])
+    train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"],cfg["BATCH_SIZE"] ,cfg["NUM_WORKERS"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"])
     net_G = UNetGenerator().to(DEVICE)
     net_G.apply(init_weights)
 
