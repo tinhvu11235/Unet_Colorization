@@ -20,8 +20,12 @@ def lab_to_rgb(L, ab):
     return lab2rgb(Lab)
 
 # Lưu checkpoint vào WandB artifact
-def save_checkpoint_as_artifact(epoch, model, optimizer, scheduler, run_id, artifact_name, artifact_type="model"):
-    checkpoint_file = f"checkpoint_epoch_{epoch}.pth"
+def save_checkpoint_as_artifact(epoch, model, optimizer, scheduler, run_id, artifact_base_name="checkpoint_epoch", artifact_type="model"):
+    # 1️⃣ Tạo tên file và tên artifact hợp lệ
+    checkpoint_file = f"{artifact_base_name}_{epoch}.pth"  # checkpoint_epoch_10.pth
+    artifact_name = f"{artifact_base_name}_{epoch}"  # checkpoint_epoch_10
+
+    # 2️⃣ Lưu checkpoint vào file
     torch.save({
         'epoch': epoch + 1,
         'model_state_dict': model.state_dict(),
@@ -30,16 +34,17 @@ def save_checkpoint_as_artifact(epoch, model, optimizer, scheduler, run_id, arti
         'run_id': run_id,
     }, checkpoint_file)
 
-    # Tạo artifact trong WandB
+    # 3️⃣ Tạo artifact trong WandB
     artifact = wandb.Artifact(artifact_name, type=artifact_type)
     artifact.add_file(checkpoint_file)  # Thêm file checkpoint vào artifact
 
-    # Log artifact vào WandB
+    # 4️⃣ Log artifact vào WandB
     wandb.log_artifact(artifact)
     print(f"Checkpoint saved and logged as artifact: {artifact_name}")
 
-    # Xóa file checkpoint sau khi lưu vào artifact
+    # 5️⃣ Xóa file checkpoint sau khi lưu vào artifact
     os.remove(checkpoint_file)
+
 
 # Huấn luyện mô hình
 def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_path=None, checkpoint_template=CHECKPOINT_PATH_TEMPLATE):
