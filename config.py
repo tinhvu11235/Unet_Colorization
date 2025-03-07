@@ -7,7 +7,7 @@ print(f"Using device: {DEVICE}")
 
 # Cấu hình cho huấn luyện từ đầu
 TRAIN_FROM_SCRATCH = {
-    "DATASET_PATH": "/kaggle/input/coco-256-123k/coco",
+    "DATASET_PATH": "/kaggle/input/cocostuff-10k-withoutgray/coco10k/images/train256",
     "BATCH_SIZE": 8,
     "EPOCHS": 20,
     "LR": 4e-4,
@@ -20,7 +20,7 @@ TRAIN_FROM_SCRATCH = {
 
 # Cấu hình cho tiếp tục huấn luyện (sử dụng checkpoint từ wandb/drive)
 CONTINUE_TRAINING = {
-    "DATASET_PATH": "/kaggle/input/CoCo_Stuff_256x256",
+    "DATASET_PATH": "/kaggle/input/cocostuff-10k-withoutgray/coco10k/images/train256",
     "BATCH_SIZE": 32,
     "EPOCHS": 36,
     "LR": 4e-4,
