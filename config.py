@@ -8,8 +8,8 @@ print(f"Using device: {DEVICE}")
 
 # Cấu hình cho huấn luyện từ đầu
 TRAIN_FROM_SCRATCH = {
-    "TRAIN_DATASET_PATH": "/kaggle/input/coco-stuff-256x256-image-only-split/CoCo_Stuff_256x256/train",
-    "VAL_DATASET_PATH": "/kaggle/input/coco-stuff-256x256-image-only-split/CoCo_Stuff_256x256/valid",
+    "TRAIN_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/train2017/train2017",
+    "VAL_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/val2017/val2017",
     "BATCH_SIZE": 32,
     "EPOCHS": 70,
     "LR": 4e-4,
@@ -22,8 +22,8 @@ TRAIN_FROM_SCRATCH = {
 
 # Cấu hình cho tiếp tục huấn luyện (sử dụng checkpoint từ wandb/drive)
 CONTINUE_TRAINING = {
-    "TRAIN_DATASET_PATH": "/kaggle/input/coco-stuff-256x256-image-only-split/CoCo_Stuff_256x256/train",
-    "VAL_DATASET_PATH": "/kaggle/input/coco-stuff-256x256-image-only-split/CoCo_Stuff_256x256/valid",
+    "TRAIN_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/train2017/train2017",
+    "VAL_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/val2017/val2017",
     "BATCH_SIZE": 32,
     "EPOCHS": 70,
     "LR": 4e-4,
