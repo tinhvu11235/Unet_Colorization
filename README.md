@@ -95,7 +95,7 @@ save_checkpoint_as_artifact(epoch, net_G, optimizer, scheduler, wandb.run.id, "c
 ## 🔍 **Loading Checkpoints from WandB Artifact**
 When resuming training, the project **automatically downloads the latest checkpoint from WandB**:
 ```python
-artifact = run.use_artifact(cfg["MODEL_ARTIFACT"], type="model")
+artifact = run.use_artifact(wandb_artifact_path, type="model")
 artifact_dir = artifact.download(root=".")
 ```
 It will then load the **latest checkpoint** from the artifact directory and continue training from there.
