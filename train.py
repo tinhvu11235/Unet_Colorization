@@ -7,13 +7,15 @@ import wandb
 import numpy as np
 from skimage.color import lab2rgb
 import gdown
-
+import requests
 from config import CHECKPOINT_PATH_TEMPLATE, DEVICE
 from model import UNetGenerator, init_weights
 from data_loader import create_dataloaders
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
+
+config = {}
 def lab_to_rgb(L, ab):
     L = (L + 1.) * 50.
     ab = ab * 110.
@@ -53,9 +55,7 @@ def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_pa
         run_id = checkpoint['run_id']
 
     if run_id:
-        wandb.init(project="image-colorization", name="Unet", id=run_id, resume="must")
-    else:
-        wandb.init(project="image-colorization", name="Unet", resume=False)
+        wandb.init(project=config["WANDB_PROJECT"], name=config["WANDB_RUN_NAME"], id=run_id, resume="must")
 
     for epoch in range(start_epoch, epochs):
         net_G.train()
@@ -134,18 +134,19 @@ def train_from_scratch(cfg):
     train_model(net_G, train_dl, val_dl, epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"])
 
 def continue_training(cfg, path):
-    run = wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], resume=True)
-    
-    artifact = run.use_artifact(path, type="model")
-    artifact_dir = artifact.download(root=".")
-    
-    checkpoint_files = [f for f in os.listdir(artifact_dir) if f.endswith(".pth")]
-    if not checkpoint_files:
-        raise ValueError("No checkpoint file found in artifact directory.")
-
-    checkpoint_path = os.path.join(artifact_dir, checkpoint_files[0])
+    global config
+    config = cfg
+    if not path.startswith("http"):
+        raise ValueError(f"Invalid URL: {path}")
+    checkpoint_url = path
+    checkpoint_file = os.path.join(".", os.path.basename(checkpoint_url))
+    response = requests.get(checkpoint_url)
+    if response.status_code == 200:
+        with open(checkpoint_file, "wb") as f:
+            f.write(response.content)
+    else:
+        raise ValueError(f"Failed to download checkpoint from {checkpoint_url}")
     net_G = UNetGenerator().to(DEVICE)
-    
     train_dl, val_dl = create_dataloaders(
         cfg["TRAIN_DATASET_PATH"],
         cfg["VAL_DATASET_PATH"],
@@ -155,4 +156,5 @@ def continue_training(cfg, path):
         cfg["VAL_SIZE"]
     )
     
-    train_model(net_G, train_dl, val_dl, epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"], checkpoint_path=checkpoint_path)
+    train_model(net_G, train_dl, val_dl, epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"], checkpoint_path=checkpoint_file)
+
