@@ -12,6 +12,8 @@ from config import CHECKPOINT_PATH_TEMPLATE, DEVICE
 from model import UNetGenerator, init_weights
 from data_loader import create_dataloaders
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 def lab_to_rgb(L, ab):
     L = (L + 1.) * 50.
     ab = ab * 110.
@@ -32,7 +34,6 @@ def save_checkpoint_as_artifact(epoch, model, optimizer, scheduler, run_id, arti
     artifact = wandb.Artifact(name=artifact_name, type='model')
     artifact.add_file(checkpoint_file)
     wandb.log_artifact(artifact)
-
     os.remove(checkpoint_file)
 
 def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_path=None):
@@ -83,41 +84,41 @@ def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_pa
 
         avg_val_loss = val_loss / len(val_dl)
         scheduler.step(avg_val_loss)
-
         save_checkpoint_as_artifact(epoch, net_G, optimizer, scheduler, wandb.run.id)
-        if (epoch + 1) % log_interval == 0:
-            with torch.no_grad():
-                sample_data = next(iter(train_dl))
-                L_sample = sample_data['L'].to(DEVICE)
-                ab_sample = sample_data['ab'].to(DEVICE)
-                fake_ab_sample = net_G(L_sample)
-                
-                real_images_train = [wandb.Image(lab_to_rgb(L_sample[i].cpu().numpy(), ab_sample[i].cpu().numpy()),
-                                                 caption=f"GT Train {i}") for i in range(5)]
-                fake_images_train = [wandb.Image(lab_to_rgb(L_sample[i].cpu().numpy(), fake_ab_sample[i].cpu().numpy()),
-                                                 caption=f"Predicted Train {i}") for i in range(5)]
-                
-                val_sample = next(iter(val_dl))
-                L_val = val_sample['L'].to(DEVICE)
-                ab_val = val_sample['ab'].to(DEVICE)
-                fake_ab_val = net_G(L_val)
-                
-                real_images_val = [wandb.Image(lab_to_rgb(L_val[i].cpu().numpy(), ab_val[i].cpu().numpy()),
-                                               caption=f"GT Val {i}") for i in range(5)]
-                fake_images_val = [wandb.Image(lab_to_rgb(L_val[i].cpu().numpy(), fake_ab_val[i].cpu().numpy()),
-                                               caption=f"Predicted Val {i}") for i in range(5)]
-                
-                wandb.log({
-                    'epoch': epoch+1,
-                    'train_loss': avg_loss,
-                    'val_loss': avg_val_loss,
-                    'lr': optimizer.param_groups[0]['lr'],
-                    'Ground Truth Train': real_images_train,
-                    'Predicted Train': fake_images_train,
-                    'Ground Truth Val': real_images_val,
-                    'Predicted Val': fake_images_val
-                })
-    
+        with torch.no_grad():
+            sample_data = next(iter(train_dl))
+            L_sample = sample_data['L'].to(DEVICE)
+            ab_sample = sample_data['ab'].to(DEVICE)
+            fake_ab_sample = net_G(L_sample)
+            real_images_train = [wandb.Image(lab_to_rgb(L_sample[i].cpu().numpy(), ab_sample[i].cpu().numpy()),
+                                                    caption=f"GT Train {i}") for i in range(5)]
+            fake_images_train = [wandb.Image(lab_to_rgb(L_sample[i].cpu().numpy(), fake_ab_sample[i].cpu().numpy()),
+                                                    caption=f"Predicted Train {i}") for i in range(5)]
+                    
+            val_sample = next(iter(val_dl))
+            L_val = val_sample['L'].to(DEVICE)
+            ab_val = val_sample['ab'].to(DEVICE)
+            fake_ab_val = net_G(L_val)       
+            real_images_val = [wandb.Image(lab_to_rgb(L_val[i].cpu().numpy(), ab_val[i].cpu().numpy()),
+                                                caption=f"GT Val {i}") for i in range(5)]
+            fake_images_val = [wandb.Image(lab_to_rgb(L_val[i].cpu().numpy(), fake_ab_val[i].cpu().numpy()),
+                                                caption=f"Predicted Val {i}") for i in range(5)]
+                    
+            wandb.log({
+                'epoch': epoch+1,
+                'train_loss': avg_loss,
+                'val_loss': avg_val_loss,
+                'lr': optimizer.param_groups[0]['lr'],
+                'Ground Truth Train': real_images_train,
+                'Predicted Train': fake_images_train,
+                'Ground Truth Val': real_images_val,
+                'Predicted Val': fake_images_val
+            })
+       
+        print(f"Epoch [{epoch+1}/{epochs}]")
+        print(f"Train Loss: {avg_loss:.4f}, Validation Loss: {avg_val_loss:.4f}")
+        
+        
     wandb.finish()
 
 def train_from_scratch(cfg):
