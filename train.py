@@ -112,10 +112,6 @@ def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_pa
 
         # Lưu checkpoint dưới dạng artifact sau mỗi epoch
         save_checkpoint_as_artifact(epoch, net_G, optimizer, scheduler, wandb.run.id)
-
-        # Log các số liệu lên wandb
-        wandb.log({'epoch': epoch+1, 'train_loss': avg_loss, 'val_loss': avg_val_loss, 'lr': optimizer.param_groups[0]['lr']})
-
         # Log ảnh mẫu lên wandb mỗi log_interval epoch (5 ảnh từ train và 5 ảnh từ validation)
         if (epoch + 1) % log_interval == 0:
             with torch.no_grad():
