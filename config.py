@@ -1,12 +1,7 @@
 import torch
 
-# Thiết lập thiết bị
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {DEVICE}")
 
-
-
-# Cấu hình cho huấn luyện từ đầu
 TRAIN_FROM_SCRATCH = {
     "TRAIN_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/train2017/train2017",
     "VAL_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/val2017/val2017",
@@ -20,7 +15,6 @@ TRAIN_FROM_SCRATCH = {
     "WANDB_RUN_NAME": "Unet",
 }
 
-# Cấu hình cho tiếp tục huấn luyện (sử dụng checkpoint từ wandb/drive)
 CONTINUE_TRAINING = {
     "TRAIN_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/train2017/train2017",
     "VAL_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/val2017/val2017",
@@ -34,6 +28,4 @@ CONTINUE_TRAINING = {
     "WANDB_RUN_NAME": "Unet",
 }
 
-
-# Mẫu tên file checkpoint
 CHECKPOINT_PATH_TEMPLATE = "checkpoint_epoch_{epoch}.pth"

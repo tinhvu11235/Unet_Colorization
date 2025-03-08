@@ -1,4 +1,3 @@
-# model.py
 import torch
 import torch.nn as nn
 
@@ -70,3 +69,10 @@ def init_weights(m):
         nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
         if m.bias is not None:
             nn.init.zeros_(m.bias)
+            
+def load_trained_model(model_path='model.pth'):
+    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+    model = UNetGenerator()
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+    return model

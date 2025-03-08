@@ -12,18 +12,17 @@ class ColorizationDataset(Dataset):
         self.paths = paths
 
     def __getitem__(self, idx):
-
-        img = Image.open(self.paths[idx]).convert("RGB")  # Chuyển ảnh về RGB
-        img = np.array(img)  # Chuyển về NumPy array có shape (H, W, 3)
+        img = Image.open(self.paths[idx]).convert("RGB")
+        img = np.array(img)
 
         if self.transform:
-            img = self.transform(Image.fromarray(img))  # PyTorch Tensor: (3, H, W)
-        
-        img_lab = rgb2lab(img.permute(1, 2, 0).numpy()).astype("float32")  # Chuyển sang LAB
-        img_lab = torch.tensor(img_lab).permute(2, 0, 1)  # Chuyển lại thành (3, H, W)
+            img = self.transform(Image.fromarray(img))
 
-        L = img_lab[[0], ...] / 50. - 1.  # Kênh L từ [0, 100] ➝ [-1, 1]
-        ab = img_lab[[1, 2], ...] / 110.  # Kênh a, b từ [-110, 110] ➝ [-1, 1]
+        img_lab = rgb2lab(img.permute(1, 2, 0).numpy()).astype("float32")
+        img_lab = torch.tensor(img_lab).permute(2, 0, 1)
+
+        L = img_lab[[0], ...] / 50. - 1.
+        ab = img_lab[[1, 2], ...] / 110.
 
         return {'L': L, 'ab': ab}
 
@@ -31,28 +30,23 @@ class ColorizationDataset(Dataset):
         return len(self.paths)
 
 def create_dataloaders(train_dataset_path, val_dataset_path, batch_size, num_workers, train_size=None, val_size=None):
-    # Lấy danh sách ảnh trong thư mục train và validation
     train_paths = glob.glob(train_dataset_path + "/*.jpg")
     val_paths = glob.glob(val_dataset_path + "/*.jpg")
-    
-    # Nếu train_size hoặc val_size là None, lấy toàn bộ ảnh
+
     if train_size is None:
         train_size = len(train_paths)
     if val_size is None:
         val_size = len(val_paths)
-    
-    # Kiểm tra nếu số lượng train_size và val_size hợp lệ
+
     if train_size > len(train_paths):
         raise ValueError(f"train_size ({train_size}) cannot be greater than the number of available training images ({len(train_paths)})")
     if val_size > len(val_paths):
         raise ValueError(f"val_size ({val_size}) cannot be greater than the number of available validation images ({len(val_paths)})")
 
-    # Tách danh sách ảnh thành tập train và validation (nếu cần)
     np.random.seed(123)
     train_paths = np.random.choice(train_paths, train_size, replace=False)
     val_paths = np.random.choice(val_paths, val_size, replace=False)
-    
-    # Các phép biến đổi cho tập train và validation
+
     train_transforms = transforms.Compose([
         transforms.Resize((256, 256), Image.BICUBIC),
         transforms.RandomHorizontalFlip(),
