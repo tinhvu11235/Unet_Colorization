@@ -29,10 +29,6 @@ pip install torch torchvision numpy scikit-image matplotlib tqdm wandb gdown
 ---
 
 ## 🚀 **How to Use ?**
-### **Train from Scratch**
-```bash
-git clone https://github.com/tinhvu11235/Unet_Colorization.git
-```
 ```bash
 python demo_release.py -i path_gray_image -o path_output
 ```
