@@ -8,7 +8,7 @@ import wandb
 import os
 from skimage.color import lab2rgb
 from config import Config as cfg 
-from model import GAN, load_trained_model
+from model import GAN, load_trained_model, pretrain_discriminator
 from torch.utils.data import DataLoader, Subset
 
 
@@ -149,6 +149,7 @@ def train_from_scratch():
     train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"],cfg["BATCH_SIZE"], cfg["NUM_WORKERS"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"])
     net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
     net_GAN.net_G.load_state_dict(download_pretrain_generator().state_dict())
+    pretrain_discriminator(train_dl,net_GAN)
     wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config=cfg)
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"])
     

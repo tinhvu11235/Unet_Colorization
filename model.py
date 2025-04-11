@@ -173,3 +173,39 @@ class GAN(nn.Module):
         self.opt_G.zero_grad()
         self.backward_G()
         self.opt_G.step()
+def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=2):
+    """
+    Pretrain the Discriminator with real images from the train data.
+    Args:
+        train_dl (DataLoader): Dataloader containing the training data with 'L' and 'ab'.
+        gan_model (GAN): The GAN model object that contains the Discriminator.
+        lr (float): Learning rate for training.
+        epochs (int): Number of epochs for pretraining.
+    """
+    print("Pretraining Discriminator...")
+    discriminator = gan_model.net_D
+    discriminator.train()  
+    
+    optimizer_D = optim.Adam(discriminator.parameters(), lr=lr, betas=(0.5, 0.999))
+    criterion = nn.BCEWithLogitsLoss()  
+    
+    for epoch in range(epochs):
+        running_loss = 0.0
+        for  data in train_dl:
+            L = data['L'].to(gan_model.device) 
+            ab = data['ab'].to(gan_model.device)  
+            batch_size = L.size(0)
+            real_labels = torch.ones(batch_size, 1).to(gan_model.device)
+            optimizer_D.zero_grad()  
+            real_image = torch.cat([L, ab], dim=1) 
+            real_preds = discriminator(real_image)
+
+            loss_D_real = criterion(real_preds, real_labels)
+
+            loss_D_real.backward()
+            optimizer_D.step()
+
+            running_loss += loss_D_real.item()
+        print(f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_dl)}")
+
+    print("Pretraining for Discriminator is complete.")
