@@ -75,11 +75,30 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None)
         epoch_train_dl = DataLoader(train_subset, batch_size=train_dl.batch_size,
                                     shuffle=True, num_workers=train_dl.num_workers)
         #start training
-        running_loss = 0.0
+        running_loss_G = 0.0
+        running_loss_D = 0.0
+        running_loss_G_GAN = 0.0
+        running_loss_G_L1 = 0.0
+        running_loss_D_fake = 0.0
+        running_loss_D_real = 0.0
+
         for data in tqdm(epoch_train_dl, desc=f"Valid Epoch {epoch+1}"):
             GAN_model.setup_input(data)
             GAN_model.optimize()
-            running_loss += GAN_model.loss_G.item()
+            running_loss_G += GAN_model.loss_G.item()
+            running_loss_D += GAN_model.loss_D.item()
+            running_loss_G_GAN += GAN_model.loss_G_GAN.item()
+            running_loss_G_L1 += GAN_model.loss_G_L1.item()
+            running_loss_D_fake += GAN_model.loss_D_fake.item()
+            running_loss_D_real += GAN_model.loss_D_real.item()
+
+        num_batches = len(epoch_train_dl)
+        average_loss_G = running_loss_G / num_batches
+        average_loss_D = running_loss_D / num_batches
+        average_loss_G_GAN = running_loss_G_GAN / num_batches
+        average_loss_G_L1 = running_loss_G_L1 / num_batches
+        average_loss_D_fake = running_loss_D_fake / num_batches
+        average_loss_D_real = running_loss_D_real / num_batches
         fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color)
         real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab)
 
@@ -99,13 +118,18 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None)
             val_fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5)
             val_real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, num=5)
         wandb.log({
-            "train_loss": running_loss / len(epoch_train_dl),
+            "train_loss": average_loss_G,
+            'average_loss_D': average_loss_D,
+            'average_loss_G_GAN': average_loss_G_GAN,
+            'average_loss_G_L1': average_loss_G_L1,
+            'average_loss_D_fake': average_loss_D_fake,
+            'average_loss_D_real': average_loss_D_real,
             "fake_images": fake_imgs,
             "real_images": real_imgs,
             "val_fake_images": val_fake_imgs,
-            "val_real_images": val_real_imgs,
+            "val_real_images": val_real_imgs
         })
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {running_loss / len(epoch_train_dl)}")
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {average_loss_G}")
         if epoch%10 == 0:
             save_checkpoint_as_artifact(epoch, GAN_model, run_id, artifact_base_name="checkpoint") 
 def download_model(url, output_path):
