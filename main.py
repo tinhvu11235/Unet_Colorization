@@ -1,5 +1,5 @@
 import argparse
-from train import train_from_scratch, continue_training
+from train import train_from_scratch, train_from_checkpoint
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -14,4 +14,4 @@ if __name__ == "__main__":
         train_from_scratch()
     elif args.mode == "continue":
         print("Continuing training from checkpoint...")
-        continue_training(args.checkpoint_path)
+        train_from_checkpoint(args.checkpoint_path)
