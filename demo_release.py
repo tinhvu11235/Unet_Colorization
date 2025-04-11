@@ -35,7 +35,7 @@ def preprocess_image(img_path, target_size=(256, 256)):
 def predict_ab(model, L_tensor, original_shape):
     with torch.no_grad():
         output = model(L_tensor)
-    
+
     predicted_AB = output.squeeze(0).permute(1, 2, 0).cpu().numpy()
     predicted_AB_rescaled = (predicted_AB + 1) * 127.5
     predicted_AB_resized = cv2.resize(predicted_AB_rescaled, (original_shape[1], original_shape[0]), interpolation=cv2.INTER_LINEAR)

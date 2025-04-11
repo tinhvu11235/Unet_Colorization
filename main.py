@@ -1,6 +1,5 @@
 import argparse
 from train import train_from_scratch, continue_training
-from config import TRAIN_FROM_SCRATCH, CONTINUE_TRAINING
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -12,7 +11,7 @@ if __name__ == "__main__":
 
     if args.mode == "scratch":
         print("Training from scratch...")
-        train_from_scratch(TRAIN_FROM_SCRATCH)
+        train_from_scratch()
     elif args.mode == "continue":
         print("Continuing training from checkpoint...")
-        continue_training(CONTINUE_TRAINING, args.checkpoint_path)
+        continue_training(args.checkpoint_path)

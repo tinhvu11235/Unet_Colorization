@@ -1,34 +1,31 @@
-import os
-import torch
-import torch.optim as optim
-import torch.nn as nn
-from tqdm.auto import tqdm
-import wandb
-import numpy as np
-from skimage.color import lab2rgb
 import gdown
 import requests
-from config import CHECKPOINT_PATH_TEMPLATE, DEVICE
-from model import UNetGenerator, init_weights
+import torch
+import numpy as np
+import tqdm
 from data_loader import create_dataloaders
+import wandb
+import os
+from skimage.color import lab2rgb
+from config import Config as cfg 
+from model import GAN, load_trained_model
+from torch.utils.data import DataLoader, Subset
 
-import warnings
-warnings.filterwarnings("ignore", category=UserWarning)
 
-config = {}
 def lab_to_rgb(L, ab):
     L = (L + 1.) * 50.
     ab = ab * 110.
     Lab = np.concatenate([L, ab], axis=0).transpose(1, 2, 0)
     return lab2rgb(Lab)
 
-def save_checkpoint_as_artifact(epoch, model, optimizer, scheduler, run_id, artifact_base_name="checkpoint"):
+def save_checkpoint_as_artifact(epoch, model, run_id, artifact_base_name="checkpoint"):
     checkpoint_file = f"{artifact_base_name}_epoch_{epoch}.pth"
     torch.save({
         'epoch': epoch + 1,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
+        'Unet_state_dict': model.net_G.state_dict(),
+        'Disc_state_dict': model.net_D.state_dict(),
+        'optimizer_Unet_state_dict': model.opt_G.state_dict(),
+        'optimizer_Disc_state_dict': model.opt_D.state_dict(),
         'run_id': run_id,
     }, checkpoint_file)
 
@@ -38,104 +35,99 @@ def save_checkpoint_as_artifact(epoch, model, optimizer, scheduler, run_id, arti
     wandb.log_artifact(artifact)
     os.remove(checkpoint_file)
 
-def train_model(net_G, train_dl, val_dl, epochs, log_interval, lr, checkpoint_path=None):
-    optimizer = optim.Adam(net_G.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=5)
-    criterion = nn.L1Loss()
+def log_image_wandb(L, ab,num = 5):
+    L.cpu().numpy()
+    ab.cpu().numpy()
+    wandb_image = []
+    for i in range(num):
+        image = lab_to_rgb(L[i], ab[i])
+        wandb_image.append(wandb.Image(image, caption=f"Image {i}"))
+    return wandb_image
 
+def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None):
+    epochs = cfg["EPOCHS"]
     start_epoch = 0
     run_id = None
-
-    if checkpoint_path and os.path.exists(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
-        net_G.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    if checkpoint_path:
+        checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'))
         start_epoch = checkpoint['epoch']
+        GAN_model.net_G.load_state_dict(checkpoint['Unet_state_dict'])
+        GAN_model.net_D.load_state_dict(checkpoint['Disc_state_dict'])
+        GAN_model.opt_G.load_state_dict(checkpoint['optimizer_Unet_state_dict'])
+        GAN_model.opt_D.load_state_dict(checkpoint['optimizer_Disc_state_dict'])
         run_id = checkpoint['run_id']
+    if run_id :
+        wandb.init(project=cfg["WANDB_PROJECTE"], name=cfg["WANDB_RUN_NAME"], id = run_id, resume = "must")
+    train_dataset = train_dl.dataset
+    val_dataset = val_dl.dataset
 
-    if run_id:
-        wandb.init(project=config["WANDB_PROJECT"], name=config["WANDB_RUN_NAME"], id=run_id, resume="must")
-
-    for epoch in range(start_epoch, epochs):
-        net_G.train()
+    samples_per_epoch = 10000
+    samples_per_epoch_val = 100
+    for epoch in range(start_epoch,epochs):
+        train_global_index = (epoch * samples_per_epoch) % len(train_dataset)
+        if train_global_index + samples_per_epoch <= len(train_dataset):
+            train_indices = list(range(train_global_index, train_global_index + samples_per_epoch))
+        else:
+            overflow = (train_global_index + samples_per_epoch) - len(train_dataset)
+            train_indices = list(range(train_global_index, len(train_dataset))) + list(range(0, overflow))
+        train_subset = Subset(train_dataset, train_indices)
+        epoch_train_dl = DataLoader(train_subset, batch_size=train_dl.batch_size,
+                                    shuffle=True, num_workers=train_dl.num_workers)
+        #start training
         running_loss = 0.0
-        for data in tqdm(train_dl):
-            L = data['L'].to(DEVICE)
-            ab = data['ab'].to(DEVICE)
-            fake_ab = net_G(L)
-            loss = criterion(fake_ab, ab)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
+        for data in tqdm(epoch_train_dl, desc=f"Valid Epoch {epoch+1}"):
+            GAN_model.setup_input(data)
+            GAN_model.optimize()
+            running_loss += GAN_model.loss_G.item()
+        fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color)
+        real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab)
 
-        avg_loss = running_loss / len(train_dl)
-
-        net_G.eval()
-        val_loss = 0.0
+        val_global_index = (epoch * samples_per_epoch_val) % len(val_dataset)
+        if val_global_index + samples_per_epoch_val <= len(val_dataset):
+            val_indices = list(range(val_global_index, val_global_index + samples_per_epoch_val))
+        else:
+            overflow_val = (val_global_index + samples_per_epoch_val) - len(val_dataset)
+            val_indices = list(range(val_global_index, len(val_dataset))) + list(range(0, overflow_val))
+        val_subset = Subset(val_dataset, val_indices)
+        epoch_val_dl = DataLoader(val_subset, batch_size=val_dl.batch_size,
+                                  shuffle=False, num_workers=val_dl.num_workers)
         with torch.no_grad():
-            for val_data in val_dl:
-                L_val = val_data['L'].to(DEVICE)
-                ab_val = val_data['ab'].to(DEVICE)
-                fake_ab_val = net_G(L_val)
-                loss = criterion(fake_ab_val, ab_val)
-                val_loss += loss.item()
+            data = next(iter(epoch_val_dl))
+            GAN_model.setup_input(data)
+            GAN_model.forward()
+            val_fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5)
+            val_real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, num=5)
+        wandb.log({
+            "train_loss": running_loss / len(epoch_train_dl),
+            "fake_images": fake_imgs,
+            "real_images": real_imgs,
+            "val_fake_images": val_fake_imgs,
+            "val_real_images": val_real_imgs,
+        })
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {running_loss / len(epoch_train_dl)}")
+        if epoch%10 == 0:
+            save_checkpoint_as_artifact(epoch, GAN_model, run_id, artifact_base_name="checkpoint") 
+def download_model(url, output_path):
+    if not os.path.exists(output_path):
+        gdown.download(url, output_path, quiet=False)
+    else:
+        print(f"{output_path} already exists, skipping download.")
 
-        avg_val_loss = val_loss / len(val_dl)
-        scheduler.step(avg_val_loss)
-        save_checkpoint_as_artifact(epoch, net_G, optimizer, scheduler, wandb.run.id)
-        with torch.no_grad():
-            sample_data = next(iter(train_dl))
-            L_sample = sample_data['L'].to(DEVICE)
-            ab_sample = sample_data['ab'].to(DEVICE)
-            fake_ab_sample = net_G(L_sample)
-            real_images_train = [wandb.Image(lab_to_rgb(L_sample[i].cpu().numpy(), ab_sample[i].cpu().numpy()),
-                                                    caption=f"GT Train {i}") for i in range(5)]
-            fake_images_train = [wandb.Image(lab_to_rgb(L_sample[i].cpu().numpy(), fake_ab_sample[i].cpu().numpy()),
-                                                    caption=f"Predicted Train {i}") for i in range(5)]
-                    
-            val_sample = next(iter(val_dl))
-            L_val = val_sample['L'].to(DEVICE)
-            ab_val = val_sample['ab'].to(DEVICE)
-            fake_ab_val = net_G(L_val)       
-            real_images_val = [wandb.Image(lab_to_rgb(L_val[i].cpu().numpy(), ab_val[i].cpu().numpy()),
-                                                caption=f"GT Val {i}") for i in range(5)]
-            fake_images_val = [wandb.Image(lab_to_rgb(L_val[i].cpu().numpy(), fake_ab_val[i].cpu().numpy()),
-                                                caption=f"Predicted Val {i}") for i in range(5)]
-                    
-            wandb.log({
-                'epoch': epoch+1,
-                'train_loss': avg_loss,
-                'val_loss': avg_val_loss,
-                'lr': optimizer.param_groups[0]['lr'],
-                'Ground Truth Train': real_images_train,
-                'Predicted Train': fake_images_train,
-                'Ground Truth Val': real_images_val,
-                'Predicted Val': fake_images_val
-            })
-       
-        print(f"Epoch [{epoch+1}/{epochs}]")
-        print(f"Train Loss: {avg_loss:.4f}, Validation Loss: {avg_val_loss:.4f}")
-        
-        
-    wandb.finish()
+def download_pretrain_generator():
+    model_url = 'https://drive.google.com/uc?id=1dD7PQt1RB-IqNVJFHlnsG9MdkmdDuRxH'
+    model_path = 'model.pth'
+    download_model(model_url, model_path)
+    Unet_Generator = load_trained_model(model_path)
+    return Unet_Generator
 
-def train_from_scratch(cfg):
+def train_from_scratch():
     train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"],cfg["BATCH_SIZE"], cfg["NUM_WORKERS"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"])
-    net_G = UNetGenerator().to(DEVICE)
-    net_G.apply(init_weights)
-
-    wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config={
-        'learning_rate': cfg["LR"],
-        'epochs': cfg["EPOCHS"],
-        'batch_size': cfg["BATCH_SIZE"],
-    })
-    train_model(net_G, train_dl, val_dl, epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"])
-
-def continue_training(cfg, path):
-    global config
-    config = cfg
+    net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
+    net_GAN.net_G.load_state_dict(download_pretrain_generator().state_dict())
+    wandb.init(project=cfg["WANDB_PROJECTE"], name=cfg["WANDB_RUN_NAME"], config=cfg)
+    train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"])
+    
+def train_from_checkpoint(path):
     if not path.startswith("http"):
         raise ValueError(f"Invalid URL: {path}")
     checkpoint_url = path
@@ -146,15 +138,6 @@ def continue_training(cfg, path):
             f.write(response.content)
     else:
         raise ValueError(f"Failed to download checkpoint from {checkpoint_url}")
-    net_G = UNetGenerator().to(DEVICE)
-    train_dl, val_dl = create_dataloaders(
-        cfg["TRAIN_DATASET_PATH"],
-        cfg["VAL_DATASET_PATH"],
-        cfg["BATCH_SIZE"],
-        cfg["NUM_WORKERS"],
-        cfg["TRAIN_SIZE"],
-        cfg["VAL_SIZE"]
-    )
-    
-    train_model(net_G, train_dl, val_dl, epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"], checkpoint_path=checkpoint_file)
-
+    train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"],cfg["BATCH_SIZE"], cfg["NUM_WORKERS"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"])
+    net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
+    train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"], checkpoint_path=checkpoint_file)

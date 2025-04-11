@@ -14,7 +14,6 @@ class ColorizationDataset(Dataset):
     def __getitem__(self, idx):
         img = Image.open(self.paths[idx]).convert("RGB")
         img = np.array(img)
-
         if self.transform:
             img = self.transform(Image.fromarray(img))
 
@@ -63,7 +62,7 @@ def create_dataloaders(train_dataset_path, val_dataset_path, batch_size, num_wor
     ])
 
     train_dl = DataLoader(ColorizationDataset(train_paths, transform=train_transforms),
-                            batch_size=batch_size, shuffle=True, num_workers=num_workers)
+                            batch_size=batch_size, shuffle=False, num_workers=num_workers)
     val_dl = DataLoader(ColorizationDataset(val_paths, transform=val_transforms),
                           batch_size=batch_size, num_workers=num_workers)
 
