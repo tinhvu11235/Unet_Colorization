@@ -57,7 +57,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None)
         GAN_model.opt_D.load_state_dict(checkpoint['optimizer_Disc_state_dict'])
         run_id = checkpoint['run_id']
     if run_id :
-        wandb.init(project=cfg["WANDB_PROJECTE"], name=cfg["WANDB_RUN_NAME"], id = run_id, resume = "must")
+        wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], id = run_id, resume = "must")
     train_dataset = train_dl.dataset
     val_dataset = val_dl.dataset
 
@@ -124,7 +124,7 @@ def train_from_scratch():
     train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"],cfg["BATCH_SIZE"], cfg["NUM_WORKERS"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"])
     net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
     net_GAN.net_G.load_state_dict(download_pretrain_generator().state_dict())
-    wandb.init(project=cfg["WANDB_PROJECTE"], name=cfg["WANDB_RUN_NAME"], config=cfg)
+    wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config=cfg)
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"])
     
 def train_from_checkpoint(path):
