@@ -2,7 +2,7 @@ import gdown
 import requests
 import torch
 import numpy as np
-import tqdm
+from tqdm.auto import tqdm
 from data_loader import create_dataloaders
 import wandb
 import os
