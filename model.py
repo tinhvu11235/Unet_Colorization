@@ -199,7 +199,7 @@ def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=2):
             optimizer_D.zero_grad()  
             real_image = torch.cat([L, ab], dim=1) 
             real_preds = discriminator(real_image)
-
+            real_labels = real_labels.view(batch_size, 1, 30, 30).expand_as(real_preds)
             loss_D_real = criterion(real_preds, real_labels)
 
             loss_D_real.backward()
