@@ -36,13 +36,14 @@ def save_checkpoint_as_artifact(epoch, model, run_id, artifact_base_name="checkp
     os.remove(checkpoint_file)
 
 def log_image_wandb(L, ab,num = 5):
-    L.cpu().numpy()
-    ab.cpu().numpy()
+    L = L.cpu().detach().numpy()
+    ab = ab.cpu().detach().numpy()
     wandb_image = []
     for i in range(num):
         image = lab_to_rgb(L[i], ab[i])
         wandb_image.append(wandb.Image(image, caption=f"Image {i}"))
     return wandb_image
+
 
 def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None):
     epochs = cfg["EPOCHS"]
