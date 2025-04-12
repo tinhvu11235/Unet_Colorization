@@ -102,6 +102,7 @@ class PatchDiscriminator(nn.Module):
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
+        return self
     def forward(self, x):
         return self.model(x)
 
