@@ -92,7 +92,16 @@ class PatchDiscriminator(nn.Module):
         if norm: layers.append(nn.BatchNorm2d(nf))
         if act: layers.append(nn.LeakyReLU(0.2, True))
         return nn.Sequential(*layers)
-
+    
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='leaky_relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
     def forward(self, x):
         return self.model(x)
 
@@ -125,7 +134,7 @@ class GAN(nn.Module):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_L1 = lambda_L1
         self.net_G = UNetGenerator().to(self.device)
-        self.net_D = PatchDiscriminator(input_c=3).to(self.device)
+        self.net_D = PatchDiscriminator(input_c=3).init_weights().to(self.device)
         self.GANcriterion = GANLoss(gan_mode='vanilla').to(self.device)
         self.L1criterion = nn.L1Loss()
         self.opt_G = optim.Adam(self.net_G.parameters(), lr=lr_G, betas=(beta1, beta2))
