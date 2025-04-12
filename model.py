@@ -65,12 +65,12 @@ class UNetGenerator(nn.Module):
 
         return self.output_layer(x).tanh()
 
-def init_weights(m):
-    if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-        nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-        if m.bias is not None:
-            nn.init.zeros_(m.bias)
-            
+    def init_weights(self, m):
+        if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+                
 def load_trained_model(model_path='model.pth'):
     checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
     model = UNetGenerator()
@@ -102,6 +102,7 @@ class PatchDiscriminator(nn.Module):
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
+                
     def forward(self, x):
         return self.model(x)
 
@@ -133,7 +134,7 @@ class GAN(nn.Module):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_L1 = lambda_L1
-        self.net_G = UNetGenerator().to(self.device)
+        self.net_G = UNetGenerator().init_weights().to(self.device)
         self.net_D = PatchDiscriminator(input_c=3).init_weights().to(self.device)
         self.GANcriterion = GANLoss(gan_mode='vanilla').to(self.device)
         self.L1criterion = nn.L1Loss()
@@ -182,39 +183,29 @@ class GAN(nn.Module):
         self.opt_G.zero_grad()
         self.backward_G()
         self.opt_G.step()
+
 def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=2):
-    """
-    Pretrain the Discriminator with real images from the train data.
-    Args:
-        train_dl (DataLoader): Dataloader containing the training data with 'L' and 'ab'.
-        gan_model (GAN): The GAN model object that contains the Discriminator.
-        lr (float): Learning rate for training.
-        epochs (int): Number of epochs for pretraining.
-    """
     print("Pretraining Discriminator...")
-    discriminator = gan_model.net_D
-    discriminator.train()  
-    
-    optimizer_D = optim.Adam(discriminator.parameters(), lr=lr, betas=(0.5, 0.999))
-    criterion = nn.BCEWithLogitsLoss()  
+    gan_model.net_D.train()
+    gan_model.set_requires_grad(gan_model.net_D, True)
     
     for epoch in range(epochs):
         running_loss = 0.0
+        real_loss = 0.0
+        fake_loss = 0.0
         for  data in train_dl:
-            L = data['L'].to(gan_model.device) 
-            ab = data['ab'].to(gan_model.device)  
-            batch_size = L.size(0)
-            real_labels = torch.ones(batch_size, 1).to(gan_model.device)
-            optimizer_D.zero_grad()  
-            real_image = torch.cat([L, ab], dim=1) 
-            real_preds = discriminator(real_image)
-            real_labels = real_labels.view(batch_size, 1, 1, 1).expand_as(real_preds)
-            loss_D_real = criterion(real_preds, real_labels)
+            gan_model.setup_input(data)
+            gan_model.forward()
+            gan_model.opt_D.zero_grad()
+            gan_model.backward_D()
+            gan_model.opt_D.step()
 
-            loss_D_real.backward()
-            optimizer_D.step()
-
-            running_loss += loss_D_real.item()
-        print(f"Epoch [{epoch + 1}/{epochs}], Loss: {running_loss / len(train_dl)}")
+            running_loss += gan_model.loss_D.item()
+            real_loss += gan_model.loss_D_real.item()
+            fake_loss += gan_model.loss_D_fake.item()
+        print(f"Epoch [{epoch + 1}/{epochs}], "
+          f"Running Loss: {running_loss / len(train_dl):.4f}, "
+          f"Real Loss: {real_loss / len(train_dl):.4f}, "
+          f"Fake Loss: {fake_loss / len(train_dl):.4f}")
 
     print("Pretraining for Discriminator is complete.")
