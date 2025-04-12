@@ -195,7 +195,8 @@ def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=2):
         fake_loss = 0.0
         for  data in train_dl:
             gan_model.setup_input(data)
-            gan_model.forward()
+            with torch.no_grad():
+                gan_model.forward()
             gan_model.opt_D.zero_grad()
             gan_model.backward_D()
             gan_model.opt_D.step()
