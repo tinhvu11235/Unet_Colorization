@@ -134,7 +134,7 @@ class GAN(nn.Module):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_L1 = lambda_L1
-        self.net_G = UNetGenerator().init_weights().to(self.device)
+        self.net_G = UNetGenerator().to(self.device)
         self.net_D = PatchDiscriminator(input_c=3).init_weights().to(self.device)
         self.GANcriterion = GANLoss(gan_mode='vanilla').to(self.device)
         self.L1criterion = nn.L1Loss()
