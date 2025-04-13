@@ -74,7 +74,10 @@ def init_weights(self, m):
 def load_trained_model(model_path='model.pth'):
     checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
     model = UNetGenerator()
-    model.load_state_dict(checkpoint['model_state_dict'])
+    try:
+        model.load_state_dict(checkpoint['model_state_dict'])
+    except:
+        model.load_state_dict(checkpoint)
     model.eval()
     return model
 
