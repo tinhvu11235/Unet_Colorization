@@ -65,11 +65,12 @@ class UNetGenerator(nn.Module):
 
         return self.output_layer(x).tanh()
 
-    def init_weights(self, m):
-        if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-            nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
         return self
                 
 def load_trained_model(model_path='model.pth'):
