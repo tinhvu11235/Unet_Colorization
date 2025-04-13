@@ -75,7 +75,10 @@ class UNetGenerator(nn.Module):
 def load_trained_model(model_path='model.pth'):
     checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
     model = UNetGenerator()
-    model.load_state_dict(checkpoint['model_state_dict'])
+    try:
+        model.load_state_dict(checkpoint['model_state_dict'])
+    except:
+        model.load_state_dict(checkpoint)
     model.eval()
     return model
 
@@ -185,7 +188,7 @@ class GAN(nn.Module):
         self.backward_G()
         self.opt_G.step()
 
-def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=2):
+def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=3):
     print("Pretraining Discriminator...")
     gan_model.net_D.train()
     gan_model.set_requires_grad(gan_model.net_D, True)
