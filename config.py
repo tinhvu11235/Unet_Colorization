@@ -7,7 +7,7 @@ Config = {
     "VAL_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/val2017/val2017",
     "BATCH_SIZE": 32,
     "EPOCHS": 200,
-    "LR_G": 1e-5,
+    "LR_G": 2e-5,
     "LR_D": 2e-4,
     "NUM_WORKERS": 4,
     "TRAIN_SIZE": 118000,
