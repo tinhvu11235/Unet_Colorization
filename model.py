@@ -184,7 +184,7 @@ class GAN(nn.Module):
         self.backward_G()
         self.opt_G.step()
 
-def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=2):
+def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=3):
     print("Pretraining Discriminator...")
     gan_model.net_D.train()
     gan_model.set_requires_grad(gan_model.net_D, True)
