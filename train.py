@@ -8,7 +8,7 @@ import wandb
 import os
 from skimage.color import lab2rgb
 from config import Config as cfg 
-from model import GAN, load_trained_model, pretrain_discriminator
+from model import GAN, load_trained_model, pretrain_discriminator, get_encoder_weights
 from torch.utils.data import DataLoader, Subset
 
 
@@ -144,12 +144,16 @@ def download_pretrain_generator():
     download_model(model_url, model_path)
     Unet_Generator = load_trained_model(model_path)
     return Unet_Generator
-
+def pretrain_encoder_weights():
+    model_url = 'https://drive.google.com/uc?id=1mzQJ166I8fBv3AJpwFhPq99twIrvNRbd'
+    model_path = 'model.pth'
+    return get_encoder_weights(model_path)
 def train_from_scratch():
     train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"],cfg["BATCH_SIZE"], cfg["NUM_WORKERS"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"])
     net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
     # net_GAN.net_G.load_state_dict(download_pretrain_generator().state_dict())
-    pretrain_discriminator(train_dl,net_GAN)
+    net_GAN.net_G.load_state_dict(pretrain_encoder_weights())
+    # pretrain_discriminator(train_dl,net_GAN)
     wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config=cfg)
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"])
     

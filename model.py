@@ -72,7 +72,15 @@ class UNetGenerator(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
         return self
-                
+def get_encoder_weights(model_path='model.pth'):
+ 
+    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+    state_dict = checkpoint.get('model_state_dict', checkpoint)
+    
+    encoder_state_dict = {k: v for k, v in state_dict.items() 
+                          if k.startswith('input_layer') or k.startswith('enc')}
+    return encoder_state_dict 
+
 def load_trained_model(model_path='model.pth'):
     checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
     model = UNetGenerator()
