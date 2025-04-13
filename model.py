@@ -65,11 +65,12 @@ class UNetGenerator(nn.Module):
 
         return self.output_layer(x).tanh()
 
-def init_weights(self, m):
-    if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
-        nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-        if m.bias is not None:
-            nn.init.zeros_(m.bias)
+    def init_weights(self, m):
+        if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        return self
                 
 def load_trained_model(model_path='model.pth'):
     checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
@@ -134,7 +135,7 @@ class GAN(nn.Module):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_L1 = lambda_L1
-        self.net_G = UNetGenerator().to(self.device)
+        self.net_G = UNetGenerator().init_weights().to(self.device)
         self.net_D = PatchDiscriminator(input_c=3).init_weights().to(self.device)
         self.GANcriterion = GANLoss(gan_mode='vanilla').to(self.device)
         self.L1criterion = nn.L1Loss()
@@ -195,7 +196,8 @@ def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=2):
         fake_loss = 0.0
         for  data in train_dl:
             gan_model.setup_input(data)
-            gan_model.forward()
+            with torch.no_grad():
+                gan_model.forward()
             gan_model.opt_D.zero_grad()
             gan_model.backward_D()
             gan_model.opt_D.step()
