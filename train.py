@@ -139,7 +139,7 @@ def download_model(url, output_path):
         print(f"{output_path} already exists, skipping download.")
 
 def download_pretrain_generator():
-    model_url = 'https://drive.google.com/uc?id=166I8fBv3AJpwFhPq99twIrvNRbd'
+    model_url = 'https://drive.google.com/uc?id=1ESB4c8OQoJUsjY7wrDXpEy2gJjmqU-Ir'
     model_path = 'model.pth'
     download_model(model_url, model_path)
     Unet_Generator = load_trained_model(model_path)
