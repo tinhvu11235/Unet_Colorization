@@ -139,7 +139,7 @@ def download_model(url, output_path):
         print(f"{output_path} already exists, skipping download.")
 
 def download_pretrain_generator():
-    model_url = 'https://drive.google.com/uc?id=1mzQJ166I8fBv3AJpwFhPq99twIrvNRbd'
+    model_url = 'https://drive.google.com/uc?id=1dD7PQt1RB-IqNVJFHlnsG9MdkmdDuRxH'
     model_path = 'model.pth'
     download_model(model_url, model_path)
     Unet_Generator = load_trained_model(model_path)
@@ -152,9 +152,9 @@ def pretrain_encoder_weights():
 def train_from_scratch():
     train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"],cfg["BATCH_SIZE"], cfg["NUM_WORKERS"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"])
     net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
-    # net_GAN.net_G.load_state_dict(download_pretrain_generator().state_dict())
-    net_GAN.net_G.load_state_dict(pretrain_encoder_weights(),strict=False)
-    # pretrain_discriminator(train_dl,net_GAN)
+    net_GAN.net_G.load_state_dict(download_pretrain_generator().state_dict())
+    # net_GAN.net_G.load_state_dict(pretrain_encoder_weights(),strict=False)
+    pretrain_discriminator(train_dl,net_GAN)
     wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config=cfg)
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"])
     
