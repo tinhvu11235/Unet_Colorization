@@ -197,16 +197,28 @@ class GAN(nn.Module):
         self.backward_G()
         self.opt_G.step()
 
-def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=3):
+def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=10):
     print("Pretraining Discriminator...")
+
+    shuffled_train_dl = DataLoader(
+        dataset=train_dl.dataset,         
+        batch_size=train_dl.batch_size,    
+        shuffle=True,                     
+        num_workers=train_dl.num_workers, 
+        pin_memory=train_dl.pin_memory,   
+        drop_last=train_dl.drop_last if hasattr(train_dl, 'drop_last') else False,
+        collate_fn=train_dl.collate_fn if hasattr(train_dl, 'collate_fn') else None
+    )
+
     gan_model.net_D.train()
     gan_model.set_requires_grad(gan_model.net_D, True)
-    
+
     for epoch in range(epochs):
         running_loss = 0.0
         real_loss = 0.0
         fake_loss = 0.0
-        for  data in train_dl:
+        
+        for data in shuffled_train_dl:
             gan_model.setup_input(data)
             with torch.no_grad():
                 gan_model.forward()
@@ -217,9 +229,11 @@ def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=3):
             running_loss += gan_model.loss_D.item()
             real_loss += gan_model.loss_D_real.item()
             fake_loss += gan_model.loss_D_fake.item()
+        
         print(f"Epoch [{epoch + 1}/{epochs}], "
-          f"Running Loss: {running_loss / len(train_dl):.4f}, "
-          f"Real Loss: {real_loss / len(train_dl):.4f}, "
-          f"Fake Loss: {fake_loss / len(train_dl):.4f}")
+              f"Running Loss: {running_loss / len(shuffled_train_dl):.4f}, "
+              f"Real Loss: {real_loss / len(shuffled_train_dl):.4f}, "
+              f"Fake Loss: {fake_loss / len(shuffled_train_dl):.4f}")
 
     print("Pretraining for Discriminator is complete.")
+
