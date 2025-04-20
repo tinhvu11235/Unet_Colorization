@@ -154,7 +154,7 @@ def train_from_scratch():
     net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
     net_GAN.net_G.load_state_dict(download_pretrain_generator().state_dict())
     # net_GAN.net_G.load_state_dict(pretrain_encoder_weights(),strict=False)
-    # pretrain_discriminator(train_dl,net_GAN)
+    pretrain_discriminator(train_dl,net_GAN)
     wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config=cfg)
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"])
     
