@@ -172,7 +172,7 @@ class GAN(nn.Module):
             self.loss_D_fake = torch.tensor(0.0, device=self.L.device)
             self.loss_D_real = torch.tensor(0.0, device=self.L.device)
             self.loss_D = torch.tensor(0.0, device=self.L.device)
-             return 
+            return 
         self.loss_D_fake = self.GANcriterion(fake_preds, False)
         real_image = torch.cat([self.L, self.ab], dim=1)
         real_preds = self.net_D(real_image)
