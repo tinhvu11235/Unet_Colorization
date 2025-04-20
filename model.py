@@ -184,12 +184,12 @@ class GAN(nn.Module):
         self.loss_G.backward()
 
     def optimize(self):
-        # self.forward()
-        # self.net_D.train()
-        # self.set_requires_grad(self.net_D, True)
-        # self.opt_D.zero_grad()
-        # self.backward_D()
-        # self.opt_D.step()
+        self.forward()
+        self.net_D.train()
+        self.set_requires_grad(self.net_D, False)
+        self.opt_D.zero_grad()
+        self.backward_D()
+        self.opt_D.step()
 
         self.net_G.train()
         self.set_requires_grad(self.net_D, False)
