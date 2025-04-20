@@ -169,9 +169,9 @@ class GAN(nn.Module):
         fake_image = torch.cat([self.L, self.fake_color], dim=1)
         fake_preds = self.net_D(fake_image.detach())
         if noGAN :
-             self.loss_D_fake = 0
-             self.loss_D_real = 0
-             self.loss_D = 0
+            self.loss_D_fake = torch.tensor(0.0, device=self.L.device)
+            self.loss_D_real = torch.tensor(0.0, device=self.L.device)
+            self.loss_D = torch.tensor(0.0, device=self.L.device)
              return 
         self.loss_D_fake = self.GANcriterion(fake_preds, False)
         real_image = torch.cat([self.L, self.ab], dim=1)
