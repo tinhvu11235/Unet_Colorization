@@ -165,9 +165,14 @@ class GAN(nn.Module):
     def forward(self):
         self.fake_color = self.net_G(self.L)
 
-    def backward_D(self):
+    def backward_D(self, noGAN = False):
         fake_image = torch.cat([self.L, self.fake_color], dim=1)
         fake_preds = self.net_D(fake_image.detach())
+        if noGAN :
+             self.loss_D_fake = 0
+             self.loss_D_real = 0
+             self.loss_D = 0
+             return 
         self.loss_D_fake = self.GANcriterion(fake_preds, False)
         real_image = torch.cat([self.L, self.ab], dim=1)
         real_preds = self.net_D(real_image)
@@ -188,7 +193,7 @@ class GAN(nn.Module):
         self.net_D.train()
         self.set_requires_grad(self.net_D, False)
         self.opt_D.zero_grad()
-        self.backward_D()
+        self.backward_D(noGAN = True)
         self.opt_D.step()
 
         self.net_G.train()
