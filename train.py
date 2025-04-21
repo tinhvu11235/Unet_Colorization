@@ -59,6 +59,8 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None)
         run_id = checkpoint['run_id']
     if run_id :
         wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], id = run_id, resume = "must")
+    if run_id is None:
+        wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config=cfg)
     train_dataset = train_dl.dataset
     val_dataset = val_dl.dataset
 
@@ -131,7 +133,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None)
         })
         print(f"Epoch {epoch+1}/{epochs}, Loss: {average_loss_G}")
         if epoch%10 == 0:
-            save_checkpoint_as_artifact(epoch, GAN_model, run_id, artifact_base_name="checkpoint") 
+            save_checkpoint_as_artifact(epoch, GAN_model,  wandb.run.id, artifact_base_name="checkpoint") 
 def download_model(url, output_path):
     if not os.path.exists(output_path):
         gdown.download(url, output_path, quiet=False)
@@ -155,7 +157,6 @@ def train_from_scratch():
     net_GAN.net_G.load_state_dict(download_pretrain_generator().state_dict())
     # net_GAN.net_G.load_state_dict(pretrain_encoder_weights(),strict=False)
     pretrain_discriminator(train_dl,net_GAN)
-    wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config=cfg)
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"])
     
 def train_from_checkpoint(path):
