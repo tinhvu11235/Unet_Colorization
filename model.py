@@ -202,7 +202,7 @@ class GAN(nn.Module):
         self.backward_G()
         self.opt_G.step()
 
-def pretrain_discriminator(train_dl, gan_model, lr=2e-4, epochs=10):
+def pretrain_discriminator(train_dl, gan_model, lr=2e-5, epochs=3):
     print("Pretraining Discriminator...")
 
     shuffled_train_dl = DataLoader(
