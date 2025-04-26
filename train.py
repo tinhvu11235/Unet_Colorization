@@ -101,12 +101,12 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
                             GAN_model.forward()
                             val_fake  = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5, captions=caps_val)
                             val_real  = log_image_wandb(GAN_model.L, GAN_model.ab,         num=5, captions=caps_val)
-                            wandb.log({
+                        wandb.log({
                             "fix_fake_images": fake_imgs,
                             "fix_real_images": real_imgs,
                             "random_fake_images":   val_fake,
                             "random_real_images":   val_real,
-                            }, step=step)   
+                            })   
         for data in tqdm(train_dl, desc=f"Training Epoch {epoch+1}"):
             GAN_model.setup_input(data)
             GAN_model.optimize()
@@ -143,7 +143,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
                             "fix_real_images": real_imgs,
                             "random_fake_images":   val_fake,
                             "random_real_images":   val_real,
-                        }, step=step)   
+                        })   
         num_batches = len(train_dl)
         average_loss_G = running_loss_G / num_batches
         average_loss_D = running_loss_D / num_batches
