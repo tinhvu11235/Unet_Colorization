@@ -36,13 +36,16 @@ def save_checkpoint_as_artifact(epoch, model, run_id, artifact_base_name="checkp
     wandb.log_artifact(artifact)
     os.remove(checkpoint_file)
 
-def log_image_wandb(L, ab,num = 5):
+def log_image_wandb(L, ab,num = 5,captions = None):
     L = L.cpu().detach().numpy()
     ab = ab.cpu().detach().numpy()
     wandb_image = []
     for i in range(num):
         image = lab_to_rgb(L[i], ab[i])
-        wandb_image.append(wandb.Image(image, caption=f"Image {i}"))
+        if captions is not None:
+            wandb_image.append(wandb.Image(image, caption=captions[i]))
+        else:
+            wandb_image.append(wandb.Image(image, caption=f"Image {i}"))
     return wandb_image
 
 
@@ -73,36 +76,37 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
         running_loss_D_real = 0.0
         step = 0
         if epoch == 0 :
-            for warmup_epoch in range(warmup_epochs):
-                loss_G1 = 0.0
+           for warmup_epoch in range(warmup_epochs):
                 step = 0
                 for data in tqdm(train_dl, desc=f"Warmup Epoch {warmup_epoch+1}"):
                     GAN_model.setup_input(data)
                     GAN_model.warmup_optimize()
-                    loss_G1 += GAN_model.loss_G_L1.item()
                     step += 1
                     if step % log_interval == 0:
                         with torch.no_grad():
-                            data = next(iter(val_dl))
-                            GAN_model.setup_input(data)
+                            bs_train = len(fake_imgs)
+                            caps_train = [f"warmup{warmup_epoch+1}_step{step}_img{i+1}" for i in range(bs_train)]
+                            bs_val = len(val_fake_imgs)
+                            caps_val   = [f"warmup{warmup_epoch+1}_step{step}_img{i+1}" for i in range(bs_val)]
+                            data_fix = next(iter(val_dl))
+                            GAN_model.setup_input(data_fix)
                             GAN_model.forward()
-                            fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color)
-                            real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab)
-    
-                            num_batches = len(val_dl)                         
-                            rand_idx    = random.randrange(1,num_batches)      
+                            fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, captions=caps_train)
+                            real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab,         captions=caps_train)
+                            num_batches = len(val_dl)
+                            rand_idx    = random.randrange(1, num_batches)
                             it = iter(val_dl)
                             batch_random = next(itertools.islice(it, rand_idx, rand_idx+1))
                             GAN_model.setup_input(batch_random)
                             GAN_model.forward()
-                            val_fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5)
-                            val_real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, num=5)
-                        wandb.log({
-                            f"train/fake_images_step{step}_epoch_warmup{warmup_epoch+1}": fake_imgs,
-                            f"train/real_images_step{step}_epoch_warmup{warmup_epoch+1}": real_imgs,
-                            f"val/fake_images_step{step}_epoch_warmup{warmup_epoch+1}":   val_fake_imgs,
-                            f"val/real_images_step{step}_epoch_warmup{warmup_epoch+1}":   val_real_imgs,
-                        })
+                            val_fake  = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5, captions=caps_val)
+                            val_real  = log_image_wandb(GAN_model.L, GAN_model.ab,         num=5, captions=caps_val)
+                            wandb.log({
+                            "fix_fake_images": fake_imgs,
+                            "fix_real_images": real_imgs,
+                            "random_fake_images":   val_fake,
+                            "random_real_images":   val_real,
+                            }, step=step)   
         for data in tqdm(train_dl, desc=f"Training Epoch {epoch+1}"):
             GAN_model.setup_input(data)
             GAN_model.optimize()
@@ -115,11 +119,15 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
             step += 1
             if step % log_interval == 0:
                  with torch.no_grad():
+                    bs_train = len(fake_imgs)
+                    caps_train = [f"warmup{warmup_epoch+1}_step{step}_img{i+1}" for i in range(bs_train)]
+                    bs_val = len(val_fake_imgs)
+                    caps_val   = [f"warmup{warmup_epoch+1}_step{step}_img{i+1}" for i in range(bs_val)]
                     data = next(iter(val_dl))
                     GAN_model.setup_input(data)
                     GAN_model.forward()
-                    fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color)
-                    real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab)
+                    fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, captions=caps_train)
+                    real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab,         captions=caps_train)
 
                     num_batches = len(val_dl)                         
                     rand_idx    = random.randrange(1,num_batches)      
@@ -127,14 +135,15 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
                     batch_random = next(itertools.islice(it, rand_idx, rand_idx+1))
                     GAN_model.setup_input(batch_random)
                     GAN_model.forward()
-                    val_fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5)
-                    val_real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, num=5)
+                    val_fake  = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5, captions=caps_val)
+                    val_real  = log_image_wandb(GAN_model.L, GAN_model.ab,         num=5, captions=caps_val)
+
                     wandb.log({
-                        f"train/fake_images_step{step}_epoch{epoch+1}": fake_imgs,
-                        f"train/real_images_step{step}_epoch{epoch+1}": real_imgs,
-                        f"val/fake_images_step{step}_epoch{epoch+1}":   val_fake_imgs,
-                        f"val/real_images_step{step}_epoch{epoch+1}":   val_real_imgs,
-                    })
+                            "fix_fake_images": fake_imgs,
+                            "fix_real_images": real_imgs,
+                            "random_fake_images":   val_fake,
+                            "random_real_images":   val_real,
+                        }, step=step)   
         num_batches = len(train_dl)
         average_loss_G = running_loss_G / num_batches
         average_loss_D = running_loss_D / num_batches
@@ -166,10 +175,10 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
             'average_loss_G_L1': average_loss_G_L1,
             'average_loss_D_fake': average_loss_D_fake,
             'average_loss_D_real': average_loss_D_real,
-            "fake_images": fake_imgs,
-            "real_images": real_imgs,
-            "val_fake_images": val_fake_imgs,
-            "val_real_images": val_real_imgs
+            "end_fake_images": fake_imgs,
+            "end_real_images": real_imgs,
+            "end_val_fake_images": val_fake_imgs,
+            "end_val_real_images": val_real_imgs
         })
         print(f"Epoch {epoch+1}/{epochs}, Loss: {average_loss_G}")
         
