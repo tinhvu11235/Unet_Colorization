@@ -62,8 +62,9 @@ class UNetGenerator(nn.Module):
         x = self.dec2(x, x3)
         x = self.dec3(x, x2)
         x = self.dec4(x, x1)
-
-        return self.output_layer(x)
+        x = self.output_layer(x)
+        x = torch.tanh(x)
+        return x
 
     def init_weights(self):
         for m in self.modules():
