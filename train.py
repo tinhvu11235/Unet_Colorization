@@ -77,17 +77,17 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
         step = 0
         if epoch == 0 :
            for warmup_epoch in range(warmup_epochs):
-                step = 0
+                step_warmup = 0
                 for data in tqdm(train_dl, desc=f"Warmup Epoch {warmup_epoch+1}"):
                     GAN_model.setup_input(data)
                     GAN_model.warmup_optimize()
-                    step += 1
-                    if step % log_interval == 0:
+                    step_warmup += 1
+                    if step_warmup % log_interval == 0:
                         with torch.no_grad():
                             bs_train = cfg["BATCH_SIZE"]
-                            caps_train = [f"warmup{warmup_epoch+1}_step{step}_img{i+1}" for i in range(bs_train)]
+                            caps_train = [f"warmup{warmup_epoch+1}_step{step_warmup}_img{i+1}" for i in range(bs_train)]
                             bs_val =  cfg["BATCH_SIZE"]
-                            caps_val   = [f"warmup{warmup_epoch+1}_step{step}_img{i+1}" for i in range(bs_val)]
+                            caps_val   = [f"warmup{warmup_epoch+1}_step{step_warmup}_img{i+1}" for i in range(bs_val)]
                             data_fix = next(iter(val_dl))
                             GAN_model.setup_input(data_fix)
                             GAN_model.forward()
@@ -137,7 +137,6 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
                     GAN_model.forward()
                     val_fake  = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5, captions=caps_val)
                     val_real  = log_image_wandb(GAN_model.L, GAN_model.ab,         num=5, captions=caps_val)
-
                 wandb.log({
                             "fix_fake_images": fake_imgs,
                             "fix_real_images": real_imgs,
