@@ -178,7 +178,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
             "end_real_images": real_imgs,
             "end_val_fake_images": val_fake_imgs,
             "end_val_real_images": val_real_imgs
-        }, step = epoch +1)
+        })
         print(f"Epoch {epoch+1}/{epochs}, Loss: {average_loss_G}")
         
         save_checkpoint_as_artifact(epoch, GAN_model,  wandb.run.id, artifact_base_name="checkpoint") 
