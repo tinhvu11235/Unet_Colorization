@@ -8,7 +8,7 @@ Config = {
     "BATCH_SIZE": 32,
     "EPOCHS": 200,
     "LR_G": 4e-4,
-    "LR_D": 1e-4,
+    "LR_D": 2e-4,
     "NUM_WORKERS": 4,
     "TRAIN_SIZE": None,
     "VAL_SIZE": None,
