@@ -10,7 +10,8 @@ from skimage.color import lab2rgb
 from config import Config as cfg 
 from model import GAN, load_trained_model, pretrain_discriminator, get_encoder_weights
 from torch.utils.data import DataLoader, Subset
-
+import random
+import itertools
 
 def lab_to_rgb(L, ab):
     L = (L + 1.) * 50.
@@ -45,7 +46,7 @@ def log_image_wandb(L, ab,num = 5):
     return wandb_image
 
 
-def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None):
+def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None, warmup_epochs = 3):
     epochs = cfg["EPOCHS"]
     start_epoch = 0
     run_id = None
@@ -62,21 +63,38 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None)
         wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], id = run_id, resume = "must")
     if run_id is None:
         wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config=cfg)
-    train_dataset = train_dl.dataset
-    val_dataset = val_dl.dataset
+    if epoch == 0 :
+        for epoch in range(warmup_epochs):
+            loss_G1 = 0.0
+            step = 0
+            for data in tqdm(train_dl, desc=f"Warmup Epoch {epoch+1}"):
+                GAN_model.setup_input(data)
+                GAN_model.warmup_optimize()
+                loss_G1 += GAN_model.loss_G_L1.item()
+                step += 1
+                if step % log_interval == 0:
+                    with torch.no_grad():
+                        data = next(iter(val_dl))
+                        GAN_model.setup_input(data)
+                        GAN_model.forward()
+                        fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color)
+                        real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab)
 
-    samples_per_epoch = 10000
-    samples_per_epoch_val = 100
-    for epoch in range(start_epoch,epochs):
-        train_global_index = (epoch * samples_per_epoch) % len(train_dataset)
-        if train_global_index + samples_per_epoch <= len(train_dataset):
-            train_indices = list(range(train_global_index, train_global_index + samples_per_epoch))
-        else:
-            overflow = (train_global_index + samples_per_epoch) - len(train_dataset)
-            train_indices = list(range(train_global_index, len(train_dataset))) + list(range(0, overflow))
-        train_subset = Subset(train_dataset, train_indices)
-        epoch_train_dl = DataLoader(train_subset, batch_size=train_dl.batch_size,
-                                    shuffle=True, num_workers=train_dl.num_workers)
+                        num_batches = len(val_dl)                         
+                        rand_idx    = random.randrange(1,num_batches)      
+                        it = iter(val_dl)
+                        batch_random = next(itertools.islice(it, rand_idx, rand_idx+1))
+                        GAN_model.setup_input(batch_random)
+                        GAN_model.forward()
+                        val_fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5)
+                        val_real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, num=5)
+                    wandb.log({
+                        f"train/fake_images_step{step}_epoch_warmup{epoch+1}": fake_imgs,
+                        f"train/real_images_step{step}_epoch_warmup{epoch+1}": real_imgs,
+                        f"val/fake_images_step{step}_epoch_warmup{epoch+1}":   val_fake_imgs,
+                        f"val/real_images_step{step}_epoch_warmup{epoch+1}":   val_real_imgs,
+                    })
+    for epoch in range(start_epoch,epochs):   
         #start training
         running_loss_G = 0.0
         running_loss_D = 0.0
@@ -84,8 +102,8 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None)
         running_loss_G_L1 = 0.0
         running_loss_D_fake = 0.0
         running_loss_D_real = 0.0
-
-        for data in tqdm(epoch_train_dl, desc=f"Valid Epoch {epoch+1}"):
+        step = 0
+        for data in tqdm(train_dl, desc=f"Training Epoch {epoch+1}"):
             GAN_model.setup_input(data)
             GAN_model.optimize()
             running_loss_G += GAN_model.loss_G.item()
@@ -94,29 +112,50 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None)
             running_loss_G_L1 += GAN_model.loss_G_L1.item()
             running_loss_D_fake += GAN_model.loss_D_fake.item()
             running_loss_D_real += GAN_model.loss_D_real.item()
+            step += 1
+            if step % log_interval == 0:
+                 with torch.no_grad():
+                    data = next(iter(val_dl))
+                    GAN_model.setup_input(data)
+                    GAN_model.forward()
+                    fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color)
+                    real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab)
 
-        num_batches = len(epoch_train_dl)
+                    num_batches = len(val_dl)                         
+                    rand_idx    = random.randrange(1,num_batches)      
+                    it = iter(val_dl)
+                    batch_random = next(itertools.islice(it, rand_idx, rand_idx+1))
+                    GAN_model.setup_input(batch_random)
+                    GAN_model.forward()
+                    val_fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5)
+                    val_real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, num=5)
+                    wandb.log({
+                        f"train/fake_images_step{step}_epoch{epoch+1}": fake_imgs,
+                        f"train/real_images_step{step}_epoch{epoch+1}": real_imgs,
+                        f"val/fake_images_step{step}_epoch{epoch+1}":   val_fake_imgs,
+                        f"val/real_images_step{step}_epoch{epoch+1}":   val_real_imgs,
+                    })
+        num_batches = len(train_dl)
         average_loss_G = running_loss_G / num_batches
         average_loss_D = running_loss_D / num_batches
         average_loss_G_GAN = running_loss_G_GAN / num_batches
         average_loss_G_L1 = running_loss_G_L1 / num_batches
         average_loss_D_fake = running_loss_D_fake / num_batches
         average_loss_D_real = running_loss_D_real / num_batches
-        fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color)
-        real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab)
 
-        val_global_index = (epoch * samples_per_epoch_val) % len(val_dataset)
-        if val_global_index + samples_per_epoch_val <= len(val_dataset):
-            val_indices = list(range(val_global_index, val_global_index + samples_per_epoch_val))
-        else:
-            overflow_val = (val_global_index + samples_per_epoch_val) - len(val_dataset)
-            val_indices = list(range(val_global_index, len(val_dataset))) + list(range(0, overflow_val))
-        val_subset = Subset(val_dataset, val_indices)
-        epoch_val_dl = DataLoader(val_subset, batch_size=val_dl.batch_size,
-                                  shuffle=False, num_workers=val_dl.num_workers)
+
         with torch.no_grad():
-            data = next(iter(epoch_val_dl))
+            data = next(iter(val_dl))
             GAN_model.setup_input(data)
+            GAN_model.forward()
+            fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color)
+            real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab)
+
+            num_batches = len(val_dl)                         
+            rand_idx    = random.randrange(1,num_batches)      
+            it = iter(val_dl)
+            batch_random = next(itertools.islice(it, rand_idx, rand_idx+1))
+            GAN_model.setup_input(batch_random)
             GAN_model.forward()
             val_fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5)
             val_real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, num=5)
@@ -133,8 +172,8 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None)
             "val_real_images": val_real_imgs
         })
         print(f"Epoch {epoch+1}/{epochs}, Loss: {average_loss_G}")
-        if epoch%10 == 0:
-            save_checkpoint_as_artifact(epoch, GAN_model,  wandb.run.id, artifact_base_name="checkpoint") 
+        
+        save_checkpoint_as_artifact(epoch, GAN_model,  wandb.run.id, artifact_base_name="checkpoint") 
 def download_model(url, output_path):
     if not os.path.exists(output_path):
         gdown.download(url, output_path, quiet=False)
@@ -155,9 +194,9 @@ def pretrain_encoder_weights():
 def train_from_scratch():
     train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"],cfg["BATCH_SIZE"], cfg["NUM_WORKERS"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"])
     net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
-    net_GAN.net_G.load_state_dict(download_pretrain_generator().state_dict())
-    # net_GAN.net_G.load_state_dict(pretrain_encoder_weights(),strict=False)
-    pretrain_discriminator(train_dl,net_GAN)
+    # net_GAN.net_G.load_state_dict(download_pretrain_generator().state_dict())
+    # # net_GAN.net_G.load_state_dict(pretrain_encoder_weights(),strict=False)
+    # pretrain_discriminator(train_dl,net_GAN)
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"])
     
 def train_from_checkpoint(path):

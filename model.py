@@ -63,15 +63,16 @@ class UNetGenerator(nn.Module):
         x = self.dec3(x, x2)
         x = self.dec4(x, x1)
 
-        return self.output_layer(x).tanh()
+        return self.output_layer(x)
 
     def init_weights(self):
         for m in self.modules():
-            if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
                 nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
         return self
+    
 def get_encoder_weights(model_path='model.pth'):
  
     checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
@@ -143,7 +144,7 @@ class GANLoss(nn.Module):
 
 
 class GAN(nn.Module):
-    def __init__(self, lr_G=2e-4, lr_D=2e-4, beta1=0.5, beta2=0.999, lambda_L1=100.):
+    def __init__(self, lr_G=2e-4, lr_D=1e-4, beta1=0.5, beta2=0.999, lambda_L1=100.):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_L1 = lambda_L1
@@ -168,7 +169,7 @@ class GAN(nn.Module):
     def backward_D(self, noGAN = False):
         fake_image = torch.cat([self.L, self.fake_color], dim=1)
         fake_preds = self.net_D(fake_image.detach())
-        if noGAN :
+        if noGAN:
             self.loss_D_fake = torch.tensor(0.0, device=self.L.device)
             self.loss_D_real = torch.tensor(0.0, device=self.L.device)
             self.loss_D = torch.tensor(0.0, device=self.L.device)
@@ -188,12 +189,21 @@ class GAN(nn.Module):
         self.loss_G = self.loss_G_GAN + self.loss_G_L1
         self.loss_G.backward()
 
+    def warmup_optimize(self):
+        self.forward()
+        self.net_G.train()
+        self.set_requires_grad(self.net_D, False)
+        self.opt_G.zero_grad()
+        self.loss_G_L1 = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
+        self.loss_G_L1.backward()
+        self.opt_G.step()
+
     def optimize(self):
         self.forward()
         self.net_D.train()
-        self.set_requires_grad(self.net_D, False)
+        self.set_requires_grad(self.net_D, True)
         self.opt_D.zero_grad()
-        self.backward_D(noGAN = True)
+        self.backward_D(noGAN = False)
         self.opt_D.step()
 
         self.net_G.train()
