@@ -64,10 +64,10 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
     if run_id is None:
         wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config=cfg)
     if epoch == 0 :
-        for epoch in range(warmup_epochs):
+        for warmup_epoch in range(warmup_epochs):
             loss_G1 = 0.0
             step = 0
-            for data in tqdm(train_dl, desc=f"Warmup Epoch {epoch+1}"):
+            for data in tqdm(train_dl, desc=f"Warmup Epoch {warmup_epoch+1}"):
                 GAN_model.setup_input(data)
                 GAN_model.warmup_optimize()
                 loss_G1 += GAN_model.loss_G_L1.item()
@@ -89,10 +89,10 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
                         val_fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5)
                         val_real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, num=5)
                     wandb.log({
-                        f"train/fake_images_step{step}_epoch_warmup{epoch+1}": fake_imgs,
-                        f"train/real_images_step{step}_epoch_warmup{epoch+1}": real_imgs,
-                        f"val/fake_images_step{step}_epoch_warmup{epoch+1}":   val_fake_imgs,
-                        f"val/real_images_step{step}_epoch_warmup{epoch+1}":   val_real_imgs,
+                        f"train/fake_images_step{step}_epoch_warmup{warmup_epoch+1}": fake_imgs,
+                        f"train/real_images_step{step}_epoch_warmup{warmup_epoch+1}": real_imgs,
+                        f"val/fake_images_step{step}_epoch_warmup{warmup_epoch+1}":   val_fake_imgs,
+                        f"val/real_images_step{step}_epoch_warmup{warmup_epoch+1}":   val_real_imgs,
                     })
     for epoch in range(start_epoch,epochs):   
         #start training
