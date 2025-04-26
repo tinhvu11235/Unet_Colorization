@@ -118,7 +118,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
             running_loss_D_real += GAN_model.loss_D_real.item()
             step += 1
             if step % log_interval == 0:
-                 with torch.no_grad():
+                with torch.no_grad():
                     bs_train =  cfg["BATCH_SIZE"]
                     caps_train = [f"warmup{warmup_epoch+1}_step{step}_img{i+1}" for i in range(bs_train)]
                     bs_val =  cfg["BATCH_SIZE"]
@@ -138,7 +138,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
                     val_fake  = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5, captions=caps_val)
                     val_real  = log_image_wandb(GAN_model.L, GAN_model.ab,         num=5, captions=caps_val)
 
-                    wandb.log({
+                wandb.log({
                             "fix_fake_images": fake_imgs,
                             "fix_real_images": real_imgs,
                             "random_fake_images":   val_fake,
