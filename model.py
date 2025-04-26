@@ -144,7 +144,7 @@ class GANLoss(nn.Module):
 
 
 class GAN(nn.Module):
-    def __init__(self, lr_G=2e-4, lr_D=1e-4, beta1=0.5, beta2=0.999, lambda_L1=100.):
+    def __init__(self, lr_G=2e-4, lr_D=1e-4, beta1=0.5, beta2=0.999, lambda_L1=30.):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_L1 = lambda_L1
@@ -237,13 +237,13 @@ def pretrain_discriminator(train_dl, gan_model, lr=2e-5, epochs=3):
             gan_model.setup_input(data)
             with torch.no_grad():
                 gan_model.forward()
-            gan_model.opt_D.zero_grad()
-            gan_model.backward_D()
-            gan_model.opt_D.step()
+                gan_model.opt_D.zero_grad()
+                gan_model.backward_D()
+                gan_model.opt_D.step()
 
-            running_loss += gan_model.loss_D.item()
-            real_loss += gan_model.loss_D_real.item()
-            fake_loss += gan_model.loss_D_fake.item()
+                running_loss += gan_model.loss_D.item()
+                real_loss += gan_model.loss_D_real.item()
+                fake_loss += gan_model.loss_D_fake.item()
         
         print(f"Epoch [{epoch + 1}/{epochs}], "
               f"Running Loss: {running_loss / len(shuffled_train_dl):.4f}, "
