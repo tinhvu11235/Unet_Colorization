@@ -179,7 +179,8 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
             "end_fake_images": fake_imgs,
             "end_real_images": real_imgs,
             "end_val_fake_images": val_fake_imgs,
-            "end_val_real_images": val_real_imgs
+            "end_val_real_images": val_real_imgs,
+            'lr': GAN_model.opt_G.param_groups[0]['lr']
         })
         print(f"Epoch {epoch+1}/{epochs}, Loss: {average_loss_G}")
         
