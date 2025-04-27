@@ -152,7 +152,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
         average_loss_G_L1 = running_loss_G_L1 / num_batches
         average_loss_D_fake = running_loss_D_fake / num_batches
         average_loss_D_real = running_loss_D_real / num_batches
-
+        GAN_model.scheduler_G.step(average_loss_G)
 
         with torch.no_grad():
             data = next(iter(val_dl))

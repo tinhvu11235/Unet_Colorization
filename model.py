@@ -190,7 +190,6 @@ class GAN(nn.Module):
         self.loss_G_L1 = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
         self.loss_G = self.loss_G_GAN + self.loss_G_L1
         self.loss_G.backward()
-        self.scheduler_G.step(self.loss_G_L1)
 
     def warmup_optimize(self):
         self.forward()
