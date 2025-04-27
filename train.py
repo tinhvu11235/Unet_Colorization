@@ -122,9 +122,9 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
             if step % log_interval == 0:
                 with torch.no_grad():
                     bs_train =  cfg["BATCH_SIZE"]
-                    caps_train = [f"{warmup_epoch+1}_step{step}_img{i+1}" for i in range(bs_train)]
+                    caps_train = [f"{epoch+1}_step{step}_img{i+1}" for i in range(bs_train)]
                     bs_val =  cfg["BATCH_SIZE"]
-                    caps_val   = [f"{warmup_epoch+1}_step{step}_img{i+1}" for i in range(bs_val)]
+                    caps_val   = [f"{epoch+1}_step{step}_img{i+1}" for i in range(bs_val)]
                     data = next(iter(val_dl))
                     GAN_model.setup_input(data)
                     GAN_model.forward()
