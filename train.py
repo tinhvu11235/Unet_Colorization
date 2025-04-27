@@ -27,6 +27,7 @@ def save_checkpoint_as_artifact(epoch, model, run_id, artifact_base_name="checkp
         'Disc_state_dict': model.net_D.state_dict(),
         'optimizer_Unet_state_dict': model.opt_G.state_dict(),
         'optimizer_Disc_state_dict': model.opt_D.state_dict(),
+        'scheduler_state_dict': model.scheduler_G.state_dict(),
         'run_id': run_id,
     }, checkpoint_file)
 
@@ -60,8 +61,9 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
         GAN_model.net_D.load_state_dict(checkpoint['Disc_state_dict'])
         GAN_model.opt_G.load_state_dict(checkpoint['optimizer_Unet_state_dict'])
         GAN_model.opt_D.load_state_dict(checkpoint['optimizer_Disc_state_dict'])
+        GAN_model.scheduler_G.load_state_dict(checkpoint['scheduler_state_dict'])
         run_id = checkpoint['run_id']
-        pretrain_discriminator(train_dl,GAN_model)
+
     if run_id :
         wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], id = run_id, resume = "must")
     if run_id is None:
