@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
@@ -155,7 +156,7 @@ class GAN(nn.Module):
         self.L1criterion = nn.L1Loss()
         self.opt_G = optim.Adam(self.net_G.parameters(), lr=lr_G, betas=(beta1, beta2))
         self.opt_D = optim.Adam(self.net_D.parameters(), lr=lr_D, betas=(beta1, beta2))
-
+        self.scheduler_G = ReduceLROnPlateau(self.opt_G,mode='min',factor=0.95,patience=5,verbose=True)
     def set_requires_grad(self, model, requires_grad=True):
         for p in model.parameters():
             p.requires_grad = requires_grad
@@ -189,6 +190,7 @@ class GAN(nn.Module):
         self.loss_G_L1 = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
         self.loss_G = self.loss_G_GAN + self.loss_G_L1
         self.loss_G.backward()
+        self.scheduler_G.step(self.loss_G_L1)
 
     def warmup_optimize(self):
         self.forward()
