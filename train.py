@@ -50,7 +50,7 @@ def log_image_wandb(L, ab,num = 5,captions = None):
     return wandb_image
 
 
-def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None, warmup_epochs = 3):
+def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None, warmup_epochs = 2):
     epochs = cfg["EPOCHS"]
     start_epoch = 0
     run_id = None
@@ -181,7 +181,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None,
             "end_val_fake_images": val_fake_imgs,
             "end_val_real_images": val_real_imgs,
             'lr': GAN_model.opt_G.param_groups[0]['lr']
-        })
+        },step = epoch )
         print(f"Epoch {epoch+1}/{epochs}, Loss: {average_loss_G}")
         
         save_checkpoint_as_artifact(epoch, GAN_model,  wandb.run.id, artifact_base_name="checkpoint") 
