@@ -10,7 +10,7 @@ Config = {
     "LR_G": 4e-4,
     "LR_D": 2e-4,
     "NUM_WORKERS": 4,
-    "TRAIN_SIZE": None,
+    "TRAIN_SIZE": 10000,
     "VAL_SIZE": None,
     "WANDB_PROJECT": "image-colorization-123k-img",
     "WANDB_RUN_NAME": "Unet-GAN",
