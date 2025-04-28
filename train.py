@@ -50,7 +50,7 @@ def log_image_wandb(L, ab,num = 5,captions = None):
     return wandb_image
 
 
-def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None, warmup_epochs = 0):
+def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path = None, warmup_epochs = 2):
     epochs = cfg["EPOCHS"]
     start_epoch = 0
     run_id = None
