@@ -146,7 +146,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
                     "fix_real_images": real_imgs,
                     "random_fake_images": val_fake,
                     "random_real_images": val_real,
-                }, comit=False)
+                }, commit=False)
         num_batches = len(train_dl)
         average_loss_G = running_loss_G / num_batches
         average_loss_D = running_loss_D / num_batches
