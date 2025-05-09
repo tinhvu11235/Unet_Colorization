@@ -61,8 +61,10 @@ class UNetGenerator(nn.Module):
         x = self.dec2(x, x3)
         x = self.dec3(x, x2)
         x = self.dec4(x, x1)
+        x = self.output_layer(x)
+        x = torch.tanh(x)
+        return x
 
-        return self.output_layer(x)
 
 def init_weights(m):
     if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
