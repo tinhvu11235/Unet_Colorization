@@ -12,7 +12,7 @@ Config = {
     "NUM_WORKERS": 4,
     "TRAIN_SIZE": None,
     "VAL_SIZE": None,
-    "WANDB_PROJECT": "image-colorization-123k-img-version2",
+    "WANDB_PROJECT": "image-colorization-123k-img-attention",
     "WANDB_RUN_NAME": "Unet-GAN",
     "LOG_INTERVAL": 300,
 }
