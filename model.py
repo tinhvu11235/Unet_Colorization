@@ -27,15 +27,41 @@ class Encoder(nn.Module):
     def forward(self, x):
         return self.conv(self.pool(x))
 
+class AttentionGate(nn.Module):
+    def __init__(self, F_g, F_l, F_int):
+        super().__init__()
+        self.W_g = nn.Sequential(
+            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(F_int)
+        )
+        self.W_x = nn.Sequential(
+            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(F_int)
+        )
+        self.psi = nn.Sequential(
+            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid()
+        )
+        self.relu = nn.ReLU(inplace=True)
+    def forward(self, g, x):
+        g1 = self.W_g(g)
+        x1 = self.W_x(x)
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)
+        return x * psi  
+
 class Decoder(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.upconv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1)
-        self.conv = ConvBlock(in_channels, out_channels)
+        self.attn  = AttentionGate(F_g=out_channels, F_l=out_channels, F_int=out_channels//2)
+        self.conv  = ConvBlock(in_channels, out_channels)
 
     def forward(self, prev_output, skip_output):
         x = self.upconv(prev_output)
-        x = torch.cat([x, skip_output], dim=1)
+        skip_gated = self.attn(x, skip_output)
+        x = torch.cat([x, skip_gated], dim=1)
         return self.conv(x)
 
 class UNetGenerator(nn.Module):
