@@ -186,8 +186,8 @@ class UNetMSAttnGenerator(nn.Module):
         m1 = self.msa1([x5,d1,d2]); m2 = self.msa2([m1,d2,d3])
         m3 = self.msa3([m2,d3,d4])
         return torch.tanh(self.head(m3))
-        
-    def init_weights(m):
+
+def init_weights_Generator(m):
         # Khởi tạo Conv, ConvTranspose, Linear
         if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
             nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
@@ -201,6 +201,7 @@ class UNetMSAttnGenerator(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.ones_(m.weight)
             nn.init.zeros_(m.bias)
+        
 
 
 class PatchDiscriminator(nn.Module):
@@ -259,7 +260,7 @@ class GAN(nn.Module):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_L1 = lambda_L1
-        self.net_G =  UNetMSAttnGenerator(save_mode=True, window_size=8).init_weights().to(self.device)
+        self.net_G =  UNetMSAttnGenerator(save_mode=True, window_size=8).to(self.device).apply(init_weights_Generator)
         self.net_D = PatchDiscriminator(input_c=3).init_weights().to(self.device)
         self.GANcriterion = GANLoss(gan_mode='vanilla').to(self.device)
         self.L1criterion = nn.L1Loss()
