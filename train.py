@@ -8,7 +8,7 @@ import wandb
 import os
 from skimage.color import lab2rgb
 from config import Config as cfg
-from model import GAN, load_trained_model, pretrain_discriminator, get_encoder_weights
+from model import GAN
 from torch.utils.data import DataLoader, Subset
 import random
 import itertools
@@ -191,18 +191,6 @@ def download_model(url, output_path):
     else:
         print(f"{output_path} already exists, skipping download.")
 
-def download_pretrain_generator():
-    model_url = 'https://drive.google.com/uc?id=1dD7PQt1RB-IqNVJFHlnsG9MdkmdDuRxH'
-    model_path = 'model.pth'
-    download_model(model_url, model_path)
-    Unet_Generator = load_trained_model(model_path)
-    return Unet_Generator
-
-def pretrain_encoder_weights():
-    model_url = 'https://drive.google.com/uc?id=1dD7PQt1RB-IqNVJFHlnsG9MdkmdDuRxH'
-    model_path = 'model.pth'
-    download_model(model_url, model_path)
-    return get_encoder_weights(model_path)
 
 def train_from_scratch():
     train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"], cfg["BATCH_SIZE"], cfg["NUM_WORKERS"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"])
