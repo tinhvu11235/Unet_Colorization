@@ -164,28 +164,48 @@ class MultiScaleAttentionBlock(nn.Module):
 
 
 class UNetMSAttnGenerator(nn.Module):
-    """U-Net với cascade Multi-Scale Attention."""
-    def __init__(self, save_mode=True, window_size=7):
+ 
+    def __init__(self, save_mode=True, window_size=8): 
         super().__init__()
-        self.inp = ConvBlock(1, 64)
+        self.inp  = ConvBlock(1, 64)
         self.enc1 = Encoder(64,128);  self.enc2 = Encoder(128,256)
         self.enc3 = Encoder(256,512); self.enc4 = Encoder(512,1024)
         self.dec1 = Decoder(1024,512); self.dec2 = Decoder(512,256)
         self.dec3 = Decoder(256,128);  self.dec4 = Decoder(128,64)
-        self.msa1 = MultiScaleAttentionBlock([1024,512,256],192,3,window_size,save_mode)
-        self.msa2 = MultiScaleAttentionBlock([192,256,128],192,3,window_size,save_mode)
-        self.msa3 = MultiScaleAttentionBlock([192,128,64],192,3,window_size,save_mode)
-        self.head = nn.Conv2d(192,2,1)
+        self.msa1 = MultiScaleAttentionBlock([1024,512,256], 192, 3, window_size, save_mode)
+        self.msa2 = MultiScaleAttentionBlock([192,256,128], 192, 3, window_size, save_mode)
+        self.msa3 = MultiScaleAttentionBlock([192,128,64],  192, 3, window_size, save_mode)
+        # Head mới nhận 192+64 = 256 channels
+        self.head = nn.Conv2d(256, 2, 1)
 
     def forward(self, x):
-        x1 = self.inp(x);  x2 = self.enc1(x1)
-        x3 = self.enc2(x2); x4 = self.enc3(x3)
+        # 1) Encode
+        x1 = self.inp(x)
+        x2 = self.enc1(x1)
+        x3 = self.enc2(x2)
+        x4 = self.enc3(x3)
         x5 = self.enc4(x4)
-        d1 = self.dec1(x5,x4); d2 = self.dec2(d1,x3)
-        d3 = self.dec3(d2,x2); d4 = self.dec4(d3,x1)
-        m1 = self.msa1([x5,d1,d2]); m2 = self.msa2([m1,d2,d3])
-        m3 = self.msa3([m2,d3,d4])
-        return torch.tanh(self.head(m3))
+
+        # 2) Decode
+        d1 = self.dec1(x5, x4)
+        d2 = self.dec2(d1, x3)
+        d3 = self.dec3(d2, x2)
+        d4 = self.dec4(d3, x1)  # → B×64×256×256
+
+        # 3) Multi-scale attention cascade
+        m1 = self.msa1([x5, d1, d2])
+        m2 = self.msa2([m1, d2, d3])
+        m3 = self.msa3([m2, d3, d4])  # → B×192×128×128
+
+        # 4) Upsample m3 về 256×256
+        m3_up = F.interpolate(m3, size=d4.shape[2:], mode='bilinear', align_corners=False)  
+
+        # 5) Concatenate với d4
+        feat = torch.cat([m3_up, d4], dim=1)  # B×256×256×256
+
+        # 6) Head → 2 channels + tanh
+        out = torch.tanh(self.head(feat))      # B×2×256×256
+        return out
 
 def init_weights_Generator(m):
         # Khởi tạo Conv, ConvTranspose, Linear
