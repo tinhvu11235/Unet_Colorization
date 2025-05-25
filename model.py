@@ -1,14 +1,14 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 import torch.utils.checkpoint as cp
+from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+
 from einops import rearrange
-import math
 
 
 class PositionalEncoding2D(nn.Module):
