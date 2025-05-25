@@ -3,122 +3,205 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.utils.checkpoint as cp
+from einops import rearrange
+import math
+
+
+class PositionalEncoding2D(nn.Module):
+    """2D sinusoidal positional encoding cho tensor [B, C, H, W]."""
+    def __init__(self, embed_dim, height, width):
+        super().__init__()
+        if embed_dim % 2 != 0:
+            raise ValueError("embed_dim must be divisible by 2")
+        d_half = embed_dim // 2
+        # PE cho trục H
+        pos_h = torch.arange(height).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_half, 2) * -(math.log(10000.0) / d_half))
+        pe_h = torch.zeros(height, d_half)
+        pe_h[:, 0::2] = torch.sin(pos_h * div_term)
+        pe_h[:, 1::2] = torch.cos(pos_h * div_term)
+        # PE cho trục W
+        pos_w = torch.arange(width).unsqueeze(1)
+        pe_w = torch.zeros(width, d_half)
+        pe_w[:, 0::2] = torch.sin(pos_w * div_term)
+        pe_w[:, 1::2] = torch.cos(pos_w * div_term)
+        # Ghép PE
+        pe = torch.zeros(height, width, embed_dim)
+        for y in range(height):
+            pe[y, :, :d_half] = pe_h[y]
+        for x in range(width):
+            pe[:, x, d_half:] = pe_w[x]
+        pe = pe.permute(2, 0, 1).unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        return x + self.pe
+
+
+class WindowAttention2D(nn.Module):
+    """Window-based multi-head self-attention."""
+    def __init__(self, embed_dim, num_heads, window_size):
+        super().__init__()
+        self.window_size = window_size
+        self.mha = nn.MultiheadAttention(embed_dim, num_heads, batch_first=False)
+
+    def forward(self, q, k, v):
+        B, E, H, W = q.shape
+        ws = self.window_size
+        q_win = rearrange(q, 'b e (h ws1) (w ws2) -> (b h w) (ws1 ws2) e', ws1=ws, ws2=ws)
+        k_win = rearrange(k, 'b e (h ws1) (w ws2) -> (b h w) (ws1 ws2) e', ws1=ws, ws2=ws)
+        v_win = rearrange(v, 'b e (h ws1) (w ws2) -> (b h w) (ws1 ws2) e', ws1=ws, ws2=ws)
+        q2, k2, v2 = q_win.permute(1,0,2), k_win.permute(1,0,2), v_win.permute(1,0,2)
+        attn_out, _ = self.mha(q2, k2, v2)
+        attn_out = attn_out.permute(1,0,2)
+        out = rearrange(
+            attn_out,
+            '(b h w) (ws1 ws2) e -> b e (h ws1) (w ws2)',
+            b=B, h=H//ws, w=W//ws, ws1=ws, ws2=ws
+        )
+        return out
+
+
+class AttentionGate(nn.Module):
+    """Attention gate cho skip-connection."""
+    def __init__(self, F_g, F_l, F_int):
+        super().__init__()
+        self.W_g = nn.Conv2d(F_g, F_int, 1, bias=False)
+        self.W_x = nn.Conv2d(F_l, F_int, 1, bias=False)
+        self.psi = nn.Conv2d(F_int, 1, 1, bias=False)
+        self.relu = nn.ReLU(inplace=True)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, g, x):
+        psi = self.relu(self.W_g(g) + self.W_x(x))
+        psi = self.sigmoid(self.psi(psi))
+        return x * psi
+
+
 class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    """Hai lớp Conv2d + BatchNorm + ReLU."""
+    def __init__(self, in_c, out_c):
         super().__init__()
         self.block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
+            nn.Conv2d(in_c, out_c, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_c),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
+            nn.Conv2d(out_c, out_c, 3, padding=1, bias=False),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, x):
         return self.block(x)
 
+
 class Encoder(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    """Encoder U-Net: MaxPool + ConvBlock."""
+    def __init__(self, in_c, out_c):
         super().__init__()
         self.pool = nn.MaxPool2d(2)
-        self.conv = ConvBlock(in_channels, out_channels)
+        self.conv = ConvBlock(in_c, out_c)
 
     def forward(self, x):
         return self.conv(self.pool(x))
 
-class AttentionGate(nn.Module):
-    def __init__(self, F_g, F_l, F_int):
-        super().__init__()
-        self.W_g = nn.Sequential(
-            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(F_int)
-        )
-        self.W_x = nn.Sequential(
-            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(F_int)
-        )
-        self.psi = nn.Sequential(
-            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(1),
-            nn.Sigmoid()
-        )
-        self.relu = nn.ReLU(inplace=True)
-    def forward(self, g, x):
-        g1 = self.W_g(g)
-        x1 = self.W_x(x)
-        psi = self.relu(g1 + x1)
-        psi = self.psi(psi)
-        return x * psi  
 
 class Decoder(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    """Decoder U-Net: ConvTranspose + AttentionGate + ConvBlock."""
+    def __init__(self, in_c, out_c):
         super().__init__()
-        self.upconv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1)
-        self.attn  = AttentionGate(F_g=out_channels, F_l=out_channels, F_int=out_channels//2)
-        self.conv  = ConvBlock(in_channels, out_channels)
+        self.up = nn.ConvTranspose2d(in_c, out_c, 4, 2, 1, bias=False)
+        self.gate = AttentionGate(out_c, out_c, out_c//2)
+        self.conv = ConvBlock(in_c, out_c)
 
-    def forward(self, prev_output, skip_output):
-        x = self.upconv(prev_output)
-        skip_gated = self.attn(x, skip_output)
-        x = torch.cat([x, skip_gated], dim=1)
-        return self.conv(x)
+    def forward(self, x, skip):
+        x = self.up(x)
+        if x.shape[2:] != skip.shape[2:]:
+            x = F.interpolate(x, size=skip.shape[2:], mode='bilinear', align_corners=False)
+        skip = self.gate(x, skip)
+        return self.conv(torch.cat([x, skip], dim=1))
 
-class UNetGenerator(nn.Module):
-    def __init__(self):
+
+class MultiScaleAttentionBlock(nn.Module):
+    """Khối attention đa quy mô: projections → WindowAttention → fusion."""
+    def __init__(self, in_ch, embed_dim, heads, window_size, save_mode=True):
         super().__init__()
-        self.input_layer = ConvBlock(1, 64)
-        self.enc1 = Encoder(64, 128)
-        self.enc2 = Encoder(128, 256)
-        self.enc3 = Encoder(256, 512)
-        self.enc4 = Encoder(512, 1024)
-        self.dec1 = Decoder(1024, 512)
-        self.dec2 = Decoder(512, 256)
-        self.dec3 = Decoder(256, 128)
-        self.dec4 = Decoder(128, 64)
-        self.output_layer = nn.Conv2d(64, 2, kernel_size=1)
+        self.embed_dim, self.ws, self.save = embed_dim, window_size, save_mode
+        self.kp = nn.Conv2d(in_ch[0], embed_dim, 1, bias=False)
+        self.qp = nn.Conv2d(in_ch[1], embed_dim, 1, bias=False)
+        self.vp = nn.Conv2d(in_ch[2], embed_dim, 1, bias=False)
+        self.pos_enc = None
+        self.attn = WindowAttention2D(embed_dim, heads, window_size)
+        self.sp = nn.Conv2d(in_ch[1], embed_dim, 1, bias=False)
+        self.post = nn.Sequential(
+            nn.Conv2d(embed_dim*2, embed_dim, 3, padding=1, bias=False),
+            nn.BatchNorm2d(embed_dim),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, feats):
+        x5, d1, d2 = feats
+        B, _, H, W = d1.shape
+        if self.pos_enc is None or self.pos_enc.pe.shape[2:] != (H, W):
+            self.pos_enc = PositionalEncoding2D(self.embed_dim, H, W).to(d1.device)
+
+        def prep(x, proj):
+            y = proj(x)
+            if y.shape[2:] != (H, W):
+                y = F.interpolate(y, size=(H, W), mode='bilinear', align_corners=False)
+            return self.pos_enc(y)
+
+        q, k, v = prep(d1, self.qp), prep(x5, self.kp), prep(d2, self.vp)
+        attn_out = cp.checkpoint(self.attn, q, k, v) if self.save else self.attn(q, k, v)
+        skip = self.sp(d1)
+        if skip.shape[2:] != (H, W):
+            skip = F.interpolate(skip, size=(H, W), mode='bilinear', align_corners=False)
+        return self.post(torch.cat([attn_out, skip], dim=1))
+
+
+class UNetMSAttnGenerator(nn.Module):
+    """U-Net với cascade Multi-Scale Attention."""
+    def __init__(self, save_mode=True, window_size=7):
+        super().__init__()
+        self.inp = ConvBlock(1, 64)
+        self.enc1 = Encoder(64,128);  self.enc2 = Encoder(128,256)
+        self.enc3 = Encoder(256,512); self.enc4 = Encoder(512,1024)
+        self.dec1 = Decoder(1024,512); self.dec2 = Decoder(512,256)
+        self.dec3 = Decoder(256,128);  self.dec4 = Decoder(128,64)
+        self.msa1 = MultiScaleAttentionBlock([1024,512,256],192,3,window_size,save_mode)
+        self.msa2 = MultiScaleAttentionBlock([192,256,128],192,3,window_size,save_mode)
+        self.msa3 = MultiScaleAttentionBlock([192,128,64],192,3,window_size,save_mode)
+        self.head = nn.Conv2d(192,2,1)
 
     def forward(self, x):
-        x1 = self.input_layer(x)
-        x2 = self.enc1(x1)
-        x3 = self.enc2(x2)
-        x4 = self.enc3(x3)
+        x1 = self.inp(x);  x2 = self.enc1(x1)
+        x3 = self.enc2(x2); x4 = self.enc3(x3)
         x5 = self.enc4(x4)
+        d1 = self.dec1(x5,x4); d2 = self.dec2(d1,x3)
+        d3 = self.dec3(d2,x2); d4 = self.dec4(d3,x1)
+        m1 = self.msa1([x5,d1,d2]); m2 = self.msa2([m1,d2,d3])
+        m3 = self.msa3([m2,d3,d4])
+        return torch.tanh(self.head(m3))
+        
+    def init_weights(m):
+        # Khởi tạo Conv, ConvTranspose, Linear
+        if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
+            nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        # Khởi tạo BatchNorm
+        elif isinstance(m, nn.BatchNorm2d):
+            nn.init.ones_(m.weight)
+            nn.init.zeros_(m.bias)
+        # Khởi tạo LayerNorm
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.ones_(m.weight)
+            nn.init.zeros_(m.bias)
 
-        x = self.dec1(x5, x4)
-        x = self.dec2(x, x3)
-        x = self.dec3(x, x2)
-        x = self.dec4(x, x1)
-        x = self.output_layer(x)
-        x = torch.tanh(x)
-        return x
-
-    def init_weights(self):
-        for m in self.modules():
-            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
-                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-        return self
-    
-def get_encoder_weights(model_path='model.pth'):
- 
-    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
-    state_dict = checkpoint.get('model_state_dict', checkpoint)
-    
-    encoder_state_dict = {k: v for k, v in state_dict.items() 
-                          if k.startswith('input_layer') or k.startswith('enc')}
-    return encoder_state_dict 
-
-def load_trained_model(model_path='model.pth'):
-    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
-    model = UNetGenerator()
-    try:
-        model.load_state_dict(checkpoint['model_state_dict'])
-    except:
-        model.load_state_dict(checkpoint)
-    model.eval()
-    return model
 
 class PatchDiscriminator(nn.Module):
     def __init__(self, input_c, num_filters=64, n_down=3):
@@ -176,7 +259,7 @@ class GAN(nn.Module):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_L1 = lambda_L1
-        self.net_G = UNetGenerator().init_weights().to(self.device)
+        self.net_G =  UNetMSAttnGenerator(save_mode=True, window_size=8).init_weights().to(self.device)
         self.net_D = PatchDiscriminator(input_c=3).init_weights().to(self.device)
         self.GANcriterion = GANLoss(gan_mode='vanilla').to(self.device)
         self.L1criterion = nn.L1Loss()
