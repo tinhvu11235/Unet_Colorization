@@ -59,130 +59,118 @@ def evaluate_L1_on_val(GAN_model, val_dl):
     return avg_L1
 
 def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, warmup_epochs=2):
-    epochs = cfg["EPOCHS"]
-    start_epoch = 0
-    run_id = None
+    epochs   = cfg["EPOCHS"]
+    start_ep = 0
+    run_id   = None
+
     if checkpoint_path:
-        checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'))
-        start_epoch = checkpoint['epoch']
-        GAN_model.net_G.load_state_dict(checkpoint['Unet_state_dict'])
-        GAN_model.net_D.load_state_dict(checkpoint['Disc_state_dict'])
-        GAN_model.opt_G.load_state_dict(checkpoint['optimizer_Unet_state_dict'])
-        GAN_model.opt_D.load_state_dict(checkpoint['optimizer_Disc_state_dict'])
-        GAN_model.scheduler_G.load_state_dict(checkpoint['scheduler_state_dict'])
-        for state in GAN_model.opt_G.state.values():
-            if 'momentum_buffer' in state:
-                state['momentum_buffer'].zero_()
-        for state in GAN_model.opt_D.state.values():
-            if 'momentum_buffer' in state:
-                state['momentum_buffer'].zero_()
-        run_id = checkpoint['run_id']
+        ckpt = torch.load(checkpoint_path, map_location='cpu')
+        start_ep = ckpt['epoch']
+        GAN_model.net_G.load_state_dict(ckpt['Unet_state_dict'])
+        GAN_model.net_D.load_state_dict(ckpt['Disc_state_dict'])
+        GAN_model.opt_G.load_state_dict(ckpt['optimizer_Unet_state_dict'])
+        GAN_model.opt_D.load_state_dict(ckpt['optimizer_Disc_state_dict'])
+        GAN_model.scheduler_G.load_state_dict(ckpt['scheduler_state_dict'])
+        run_id = ckpt.get('run_id')
+
     if run_id:
-        wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], id=run_id, resume="must")
+        wandb.init(project=cfg["WANDB_PROJECT"],
+                   name=cfg["WANDB_RUN_NAME"],
+                   id=run_id,
+                   resume="must")
     else:
-        wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config=cfg)
-    for epoch in range(start_epoch, epochs):
-        running_loss_G = running_loss_D = 0.0
-        running_loss_G_GAN = running_loss_G_L1 = 0.0
-        running_loss_D_fake = running_loss_D_real = 0.0
+        wandb.init(project=cfg["WANDB_PROJECT"],
+                   name=cfg["WANDB_RUN_NAME"],
+                   config=cfg)
+
+    for epoch in range(start_ep, epochs):
+        running_G        = running_D        = 0.0
+        running_G_GAN    = running_G_L1     = running_G_P     = 0.0
+        running_D_fake   = running_D_real   = 0.0
         step = 0
+
+        # Warmup phase only for G-L1
         if epoch == 0:
-            for warmup_epoch in range(warmup_epochs):
-                step_warmup = 0
-                for data in tqdm(train_dl, desc=f"Warmup Epoch {warmup_epoch+1}"):
+            for w_epoch in range(warmup_epochs):
+                for data in tqdm(train_dl, desc=f"Warmup Epoch {w_epoch+1}"):
                     GAN_model.setup_input(data)
                     GAN_model.warmup_optimize()
-                    step_warmup += 1
-                    if step_warmup % log_interval == 0:
-                        with torch.no_grad():
-                            bs = cfg["BATCH_SIZE"]
-                            caps_train = [f"warmup{warmup_epoch+1}_step{step_warmup}_img{i+1}" for i in range(bs)]
-                            caps_val = caps_train.copy()
-                            data_fix = next(iter(val_dl))
-                            GAN_model.setup_input(data_fix)
-                            GAN_model.forward()
-                            fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, captions=caps_train)
-                            real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, captions=caps_train)
-                            rand_idx = random.randrange(len(val_dl))
-                            batch_rand = list(val_dl)[rand_idx]
-                            GAN_model.setup_input(batch_rand)
-                            GAN_model.forward()
-                            val_fake = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5, captions=caps_val)
-                            val_real = log_image_wandb(GAN_model.L, GAN_model.ab, num=5, captions=caps_val)
-                        wandb.log({
-                            "fix_fake_images": fake_imgs,
-                            "fix_real_images": real_imgs,
-                            "random_fake_images": val_fake,
-                            "random_real_images": val_real,
-                        })
-        for data in tqdm(train_dl, desc=f"Training Epoch {epoch+1}"):
+        
+        # Main training loop
+        for data in tqdm(train_dl, desc=f"Training Epoch {epoch+1}/{epochs}"):
             GAN_model.setup_input(data)
             GAN_model.optimize()
-            running_loss_G += GAN_model.loss_G.item()
-            running_loss_D += GAN_model.loss_D.item()
-            running_loss_G_GAN += GAN_model.loss_G_GAN.item()
-            running_loss_G_L1 += GAN_model.loss_G_L1.item()
-            running_loss_D_fake += GAN_model.loss_D_fake.item()
-            running_loss_D_real += GAN_model.loss_D_real.item()
+
+            running_G      += GAN_model.loss_G.item()
+            running_D      += GAN_model.loss_D.item()
+            running_G_GAN  += GAN_model.loss_G_GAN.item()
+            running_G_L1   += GAN_model.loss_G_L1.item()
+            running_G_P    += GAN_model.loss_G_P.item()
+            running_D_fake += GAN_model.loss_D_fake.item() if hasattr(GAN_model, 'loss_D_fake') else 0.0
+            running_D_real += GAN_model.loss_D_real.item() if hasattr(GAN_model, 'loss_D_real') else 0.0
+
             step += 1
             if step % log_interval == 0:
+                # log a fixed batch and a random validation batch
                 with torch.no_grad():
                     bs = cfg["BATCH_SIZE"]
-                    caps_train = [f"{epoch+1}_step{step}_img{i+1}" for i in range(bs)]
-                    caps_val = caps_train.copy()
-                    data_fix = next(iter(val_dl))
-                    GAN_model.setup_input(data_fix)
+                    caps_train = [f"ep{epoch+1}_st{step}_img{i+1}" for i in range(bs)]
+                    # fixed train batch
+                    data_train = next(iter(train_dl))
+                    GAN_model.setup_input(data_train)
                     GAN_model.forward()
-                    fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, captions=caps_train)
-                    real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, captions=caps_train)
-                    rand_idx = random.randrange(len(val_dl))
-                    batch_rand = list(val_dl)[rand_idx]
-                    GAN_model.setup_input(batch_rand)
+                    fake_train = log_image_wandb(GAN_model.L, GAN_model.fake_color, captions=caps_train)
+                    real_train = log_image_wandb(GAN_model.L, GAN_model.ab, captions=caps_train)
+                    wandb.log({
+                        "train/fake_images": fake_train,
+                        "train/real_images": real_train
+                    }, commit=False)
+                    # random val batch
+                    idx = random.randrange(len(val_dl))
+                    data_val = list(val_dl)[idx]
+                    GAN_model.setup_input(data_val)
                     GAN_model.forward()
-                    val_fake = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5, captions=caps_val)
-                    val_real = log_image_wandb(GAN_model.L, GAN_model.ab, num=5, captions=caps_val)
-                wandb.log({
-                    "fix_fake_images": fake_imgs,
-                    "fix_real_images": real_imgs,
-                    "random_fake_images": val_fake,
-                    "random_real_images": val_real,
-                }, commit=False)
-        num_batches = len(train_dl)
-        average_loss_G = running_loss_G / num_batches
-        average_loss_D = running_loss_D / num_batches
-        average_loss_G_GAN = running_loss_G_GAN / num_batches
-        average_loss_G_L1 = running_loss_G_L1 / num_batches
-        average_loss_D_fake = running_loss_D_fake / num_batches
-        average_loss_D_real = running_loss_D_real / num_batches
-        GAN_model.scheduler_G.step(average_loss_G)
+                    fake_val = log_image_wandb(GAN_model.L, GAN_model.fake_color, captions=caps_train)
+                    real_val = log_image_wandb(GAN_model.L, GAN_model.ab, captions=caps_train)
+                    wandb.log({
+                        "val/fake_images": fake_val,
+                        "val/real_images": real_val
+                    }, commit=False)
+
+        # compute averages
+        n = len(train_dl)
+        avg_G      = running_G / n
+        avg_D      = running_D / n
+        avg_G_GAN  = running_G_GAN / n
+        avg_G_L1   = running_G_L1 / n
+        avg_G_P    = running_G_P / n
+        avg_D_fake = running_D_fake / n
+        avg_D_real = running_D_real / n
+
+        # scheduler step
+        GAN_model.scheduler_G.step(avg_G)
+
+        # validation L1
         val_L1 = evaluate_L1_on_val(GAN_model, val_dl)
-        with torch.no_grad():
-            data_fix = next(iter(val_dl))
-            GAN_model.setup_input(data_fix)
-            GAN_model.forward()
-            fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color)
-            real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab)
-            rand_idx = random.randrange(len(val_dl))
-            batch_rand = list(val_dl)[rand_idx]
-            GAN_model.setup_input(batch_rand)
-            GAN_model.forward()
-            val_fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5)
-            val_real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, num=5)
+
+        # log metrics
         wandb.log({
-            "epoch_train_loss_G": average_loss_G,
-            "epoch_train_loss_D": average_loss_D,
-            "epoch_train_loss_G_GAN": average_loss_G_GAN,
-            "epoch_train_loss_G_L1": average_loss_G_L1,
-            "epoch_val_loss_G_L1": val_L1,
-            "epoch_train_loss_D_fake": average_loss_D_fake,
-            "epoch_train_loss_D_real": average_loss_D_real,
-            "lr": GAN_model.opt_G.param_groups[0]['lr'],
-            "end_fake_images": fake_imgs,
-            "end_real_images": real_imgs,
-            "end_val_fake_images": val_fake_imgs,
-            "end_val_real_images": val_real_imgs,
+            "epoch": epoch+1,
+            "train/total_G_loss": avg_G,
+            "train/G_GAN_loss":   avg_G_GAN,
+            "train/G_L1_loss":    avg_G_L1,
+            "train/G_Perc_loss":  avg_G_P,
+            "train/D_loss":       avg_D,
+            "train/D_fake_loss":  avg_D_fake,
+            "train/D_real_loss":  avg_D_real,
+            "val/L1_loss":        val_L1,
+            "lr":                 GAN_model.opt_G.param_groups[0]['lr']
         })
-        print(f"Epoch {epoch+1}/{epochs} — train L1: {average_loss_G_L1:.4f}, val L1: {val_L1:.4f}")
+
+        print(f"Epoch {epoch+1}/{epochs} — "
+              f"G_L1: {avg_G_L1:.4f}, G_P: {avg_G_P:.4f}, D: {avg_D:.4f}, val_L1: {val_L1:.4f}")
+
+        # save checkpoint
         save_checkpoint_as_artifact(epoch, GAN_model, wandb.run.id, artifact_base_name="checkpoint")
 
 def download_model(url, output_path):
@@ -195,8 +183,7 @@ def download_pretrain_generator():
     model_url = 'https://drive.google.com/uc?id=1dD7PQt1RB-IqNVJFHlnsG9MdkmdDuRxH'
     model_path = 'model.pth'
     download_model(model_url, model_path)
-    Unet_Generator = load_trained_model(model_path)
-    return Unet_Generator
+    return load_trained_model(model_path)
 
 def pretrain_encoder_weights():
     model_url = 'https://drive.google.com/uc?id=1dD7PQt1RB-IqNVJFHlnsG9MdkmdDuRxH'
@@ -205,21 +192,34 @@ def pretrain_encoder_weights():
     return get_encoder_weights(model_path)
 
 def train_from_scratch():
-    train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"], cfg["BATCH_SIZE"], cfg["NUM_WORKERS"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"])
+    train_dl, val_dl = create_dataloaders(
+        cfg["TRAIN_DATASET_PATH"],
+        cfg["VAL_DATASET_PATH"],
+        cfg["BATCH_SIZE"],
+        cfg["NUM_WORKERS"],
+        cfg["TRAIN_SIZE"],
+        cfg["VAL_SIZE"]
+    )
     net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"])
 
 def train_from_checkpoint(path):
     if not path.startswith("http"):
         raise ValueError(f"Invalid URL: {path}")
-    checkpoint_url = path
-    checkpoint_file = os.path.join(".", os.path.basename(checkpoint_url))
-    response = requests.get(checkpoint_url)
+    response = requests.get(path)
     if response.status_code == 200:
-        with open(checkpoint_file, "wb") as f:
+        ckpt_file = os.path.basename(path)
+        with open(ckpt_file, "wb") as f:
             f.write(response.content)
     else:
-        raise ValueError(f"Failed to download checkpoint from {checkpoint_url}")
-    train_dl, val_dl = create_dataloaders(cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"], cfg["BATCH_SIZE"], cfg["NUM_WORKERS"], cfg["TRAIN_SIZE"], cfg["VAL_SIZE"])
+        raise ValueError(f"Failed to download checkpoint from {path}")
+    train_dl, val_dl = create_dataloaders(
+        cfg["TRAIN_DATASET_PATH"],
+        cfg["VAL_DATASET_PATH"],
+        cfg["BATCH_SIZE"],
+        cfg["NUM_WORKERS"],
+        cfg["TRAIN_SIZE"],
+        cfg["VAL_SIZE"]
+    )
     net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
-    train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"], checkpoint_path=checkpoint_file)
+    train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"], checkpoint_path=ckpt_file)
