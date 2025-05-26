@@ -200,7 +200,7 @@ def train_from_scratch():
         cfg["TRAIN_SIZE"],
         cfg["VAL_SIZE"]
     )
-    net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
+    net_GAN = GAN(lrG=cfg["LR_G"], lrD=cfg["LR_D"])
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"])
 
 def train_from_checkpoint(path):
@@ -221,5 +221,5 @@ def train_from_checkpoint(path):
         cfg["TRAIN_SIZE"],
         cfg["VAL_SIZE"]
     )
-    net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
+    net_GAN = GAN(lrG=cfg["LR_G"], lrD=cfg["LR_D"])
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"], checkpoint_path=ckpt_file)
