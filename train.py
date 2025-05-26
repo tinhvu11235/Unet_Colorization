@@ -105,7 +105,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
             running_D      += GAN_model.loss_D.item()
             running_G_GAN  += GAN_model.loss_G_GAN.item()
             running_G_L1   += GAN_model.loss_G_L1.item()
-            running_G_P    += GAN_model.loss_G_P.item()
+            running_G_P    += GAN_model.loss_G_perc.item()
             running_D_fake += GAN_model.loss_D_fake.item() if hasattr(GAN_model, 'loss_D_fake') else 0.0
             running_D_real += GAN_model.loss_D_real.item() if hasattr(GAN_model, 'loss_D_real') else 0.0
 
