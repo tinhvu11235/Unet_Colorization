@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import models
 from torchvision.models import VGG16_Weights
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 # --- Squeeze-and-Excitation Block ---
 class SEBlock(nn.Module):
@@ -33,14 +34,14 @@ class ResBlock(nn.Module):
             nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=False),
             nn.InstanceNorm2d(out_ch, affine=True)
         )
-        self.se = SEBlock(out_ch)
+        self.se   = SEBlock(out_ch)
         self.proj = nn.Conv2d(in_ch, out_ch, 1, bias=False) if in_ch != out_ch else nn.Identity()
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
         res = self.conv(x)
         res = self.se(res)
-        x = self.proj(x)
+        x   = self.proj(x)
         return self.relu(x + res)
 
 # --- Non-local Global Context Module ---
@@ -55,11 +56,11 @@ class NonLocalBlock(nn.Module):
 
     def forward(self, x):
         b, c, h, w = x.shape
-        theta = self.theta(x).view(b, -1, h*w)
-        phi   = self.phi(x).view(b, -1, h*w)
-        attn  = torch.softmax(theta.transpose(1,2) @ phi, dim=-1)
-        g     = self.g(x).view(b, -1, h*w)
-        y     = g @ attn.transpose(1,2)
+        theta = self.theta(x).view(b, -1, h*w)             # b × c' × N
+        phi   = self.phi(x).view(b, -1, h*w)               # b × c' × N
+        attn  = torch.softmax(theta.transpose(1,2) @ phi, dim=-1)  # b × N × N
+        g     = self.g(x).view(b, -1, h*w)                 # b × c' × N
+        y     = g @ attn.transpose(1,2)                    # b × c' × N
         y     = y.view(b, -1, h, w)
         y     = self.out(y)
         return x + y
@@ -109,11 +110,11 @@ class UNetGenerator(nn.Module):
         d2 = self.d2(torch.cat([d3, x3], dim=1))
         d1 = self.d1(torch.cat([d2, x2], dim=1))
 
-        x2_up = F.interpolate(x2, size=d1.shape[2:], mode='bilinear', align_corners=False)
-        x3_up = F.interpolate(x3, size=d1.shape[2:], mode='bilinear', align_corners=False)
-        x4_up = F.interpolate(x4, size=d1.shape[2:], mode='bilinear', align_corners=False)
+        x2u = F.interpolate(x2, size=d1.shape[2:], mode='bilinear', align_corners=False)
+        x3u = F.interpolate(x3, size=d1.shape[2:], mode='bilinear', align_corners=False)
+        x4u = F.interpolate(x4, size=d1.shape[2:], mode='bilinear', align_corners=False)
 
-        feat = self.fuse(torch.cat([d1, x2_up, x3_up, x4_up], dim=1))
+        feat = self.fuse(torch.cat([d1, x2u, x3u, x4u], dim=1))
         return self.head(feat)
 
 # --- PatchGAN Discriminator ---
@@ -149,10 +150,10 @@ class GANLoss(nn.Module):
         label = self.real if is_real else self.fake
         return self.loss(preds, label.expand_as(preds))
 
-# --- GAN trainer with L1 warmup, adversarial + L1 + perceptual ---
+# --- GAN Trainer ---
 class GAN(nn.Module):
     def __init__(self,
-                 lrG=2e-4, lrD=1e-4,
+                 lr_G=2e-4, lr_D=1e-4,
                  beta1=0.5, beta2=0.999,
                  lambda_L1=100., lambda_perc=0.1):
         super().__init__()
@@ -172,8 +173,8 @@ class GAN(nn.Module):
         self.perc_criterion = nn.L1Loss()
         self.lambda_perc    = lambda_perc
 
-        self.opt_G = optim.Adam(self.net_G.parameters(), lr=lrG, betas=(beta1, beta2))
-        self.opt_D = optim.Adam(self.net_D.parameters(), lr=lrD, betas=(beta1, beta2))
+        self.opt_G = optim.Adam(self.net_G.parameters(), lr=lr_G, betas=(beta1, beta2))
+        self.opt_D = optim.Adam(self.net_D.parameters(), lr=lr_D, betas=(beta1, beta2))
         self.scheduler_G = ReduceLROnPlateau(self.opt_G, mode='min', factor=0.95, patience=5, verbose=True)
 
     def set_grad(self, model, req_grad):
@@ -190,20 +191,16 @@ class GAN(nn.Module):
     def backward_D(self):
         fake_img = torch.cat([self.L, self.fake.detach()], dim=1)
         real_img = torch.cat([self.L, self.ab], dim=1)
-
         lossF = self.GANcriterion(self.net_D(fake_img), False)
         lossR = self.GANcriterion(self.net_D(real_img), True)
         self.loss_D = 0.5 * (lossF + lossR)
         self.loss_D.backward()
 
     def backward_G(self):
-        fake_img = torch.cat([self.L, self.fake], dim=1)
-
-        # adversarial loss
+        fake_img       = torch.cat([self.L, self.fake], dim=1)
         self.loss_G_GAN = self.GANcriterion(self.net_D(fake_img), True)
-        # L1 loss
-        self.loss_G_L1 = self.L1criterion(self.fake, self.ab) * self.lambda_L1
-        # perceptual loss
+        self.loss_G_L1  = self.L1criterion(self.fake, self.ab) * self.lambda_L1
+
         fv = (fake_img + 1) * 0.5
         rv = (torch.cat([self.L, self.ab], dim=1) + 1) * 0.5
         feat_f = self.perc_net(fv)
@@ -214,9 +211,8 @@ class GAN(nn.Module):
         self.loss_G.backward()
 
     def optimize(self):
-        # forward
-        self.forward()
         # update D
+        self.forward()
         self.net_D.train()
         self.set_grad(self.net_D, True)
         self.opt_D.zero_grad()
@@ -230,9 +226,7 @@ class GAN(nn.Module):
         self.opt_G.step()
 
     def warmup_optimize(self):
-        """
-        Warm-up step: only optimize G with L1 loss.
-        """
+        """Warm-up: only optimize G with L1 loss."""
         self.forward()
         self.net_G.train()
         self.set_grad(self.net_D, False)
@@ -243,16 +237,15 @@ class GAN(nn.Module):
 
 # --- Utilities to load pretrained weights ---
 def get_encoder_weights(model_path='model.pth'):
-    checkpoint = torch.load(model_path, map_location='cpu')
-    state_dict = checkpoint.get('model_state_dict', checkpoint)
-    keys = ('e1', 'e2', 'e3', 'e4', 'e5')
-    return {k: v for k, v in state_dict.items() if k.split('.')[0] in keys}
+    ckpt = torch.load(model_path, map_location='cpu')
+    sd   = ckpt.get('model_state_dict', ckpt)
+    return {k: v for k, v in sd.items() if k.split('.')[0] in ('e1','e2','e3','e4','e5')}
 
 def load_trained_model(model_path='model.pth'):
-    checkpoint = torch.load(model_path, map_location='cpu')
+    ckpt  = torch.load(model_path, map_location='cpu')
     model = GAN()
     try:
-        model.load_state_dict(checkpoint['model_state_dict'])
+        model.load_state_dict(ckpt['model_state_dict'])
     except:
-        model.load_state_dict(checkpoint)
+        model.load_state_dict(ckpt)
     return model.eval()
