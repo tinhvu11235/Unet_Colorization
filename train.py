@@ -65,7 +65,12 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
     if checkpoint_path:
         checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'))
         start_epoch = checkpoint['epoch']
-        GAN_model.net_G.load_state_dict(checkpoint['Unet_state_dict'])
+        sd = checkpoint['Unet_state_dict']
+        keys_to_remove = [k for k in sd.keys() if 'pos_enc.pe' in k]
+        for k in keys_to_remove:
+            del sd[k]
+        
+        GAN_model.net_G.load_state_dict(sd, strict=True)
         GAN_model.net_D.load_state_dict(checkpoint['Disc_state_dict'])
         GAN_model.opt_G.load_state_dict(checkpoint['optimizer_Unet_state_dict'])
         GAN_model.opt_D.load_state_dict(checkpoint['optimizer_Disc_state_dict'])
