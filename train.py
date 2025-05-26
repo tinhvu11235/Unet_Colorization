@@ -8,7 +8,7 @@ import wandb
 import os
 from skimage.color import lab2rgb
 from config import Config as cfg
-from model import GAN, load_trained_model, pretrain_discriminator, get_encoder_weights
+from model import GAN, load_trained_model, get_encoder_weights
 from torch.utils.data import DataLoader, Subset
 import random
 import itertools
