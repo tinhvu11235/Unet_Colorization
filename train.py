@@ -200,7 +200,8 @@ class MultiScaleAttentionBlock(nn.Module):
             return self.pos_enc(y)
 
         q, k, v = prep(d1, self.qp), prep(x5, self.kp), prep(d2, self.vp)
-        attn_out = cp.checkpoint(self.attn, q, k, v) if self.save else self.attn(q, k, v)
+        # attn_out = cp.checkpoint(self.attn, q, k, v) if self.save else self.attn(q, k, v)
+        attn_out = self.attn(q, k, v)
         skip = self.sp(d1)
         if skip.shape[2:] != (H, W):
             skip = F.interpolate(skip, size=(H, W), mode='bilinear', align_corners=False)
