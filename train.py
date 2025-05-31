@@ -219,16 +219,13 @@ class UNetMSAttnGenerator(nn.Module):
         self.enc4 = Encoder(512, 1024)     # x5: (B,1024,16, 16)
 
         # ------------ NonLocal Global Context -------------
-        # Đổi tên thành `self.nl_block` để tránh trùng với từ khóa
-        self.nl_block = NonLocalBlock(1024)  # áp vào x5
+        self.nl_block = NonLocalBlock(1024)
 
         # ---------------------- Decoder ----------------------
-        # 2 tầng giải mã sâu (có attention gate)
-        self.dec1 = Decoder(1024, 512)     # d1: (B,512,32,32)
-        self.dec2 = Decoder(512, 256)      # d2: (B,256,64,64)
-        # 2 tầng giải mã nông (không attention gate)
-        self.dec3 = DecoderNoGate(256, 128)  # d3: (B,128,128,128)
-        self.dec4 = DecoderNoGate(128, 64)   # d4: (B, 64,256,256)
+        self.dec1 = Decoder(1024, 512)     
+        self.dec2 = Decoder(512, 256)      
+        self.dec3 = DecoderNoGate(256, 128)
+        self.dec4 = DecoderNoGate(128, 64)
 
         # ------------ Multi-Scale Attention Cascade -------------
         self.msa1 = MultiScaleAttentionBlock([1024, 512, 256], 192, 3, window_size, save_mode)
@@ -236,7 +233,6 @@ class UNetMSAttnGenerator(nn.Module):
         self.msa3 = MultiScaleAttentionBlock([192, 128, 64], 192, 3, window_size, save_mode)
 
         # ---------------------- FPN (Multi-Scale Fusion) ----------------------
-        # Lateral 1×1 conv cho x5, x4, x3, x2 → fpn_channels kênh
         self.lat5 = nn.Sequential(
             nn.Conv2d(1024, fpn_channels, kernel_size=1, bias=False),
             nn.BatchNorm2d(fpn_channels),
@@ -257,11 +253,16 @@ class UNetMSAttnGenerator(nn.Module):
             nn.BatchNorm2d(fpn_channels),
             nn.ReLU(inplace=True)
         )
-        # Không cần khối fuse tại từng bước, vì ta dùng add fusion (top-down)
+
+        # ---------------------- Thay thế interpolate(m3) ----------------------
+        self.m3_up = nn.ConvTranspose2d(
+            in_channels=192,
+            out_channels=192,
+            kernel_size=2,
+            stride=2
+        )
 
         # ---------------------- Head Cuối cùng ----------------------
-        # Input: d4 (64 kênh) + m3_up (192 kênh) + fpn_up (64 kênh) = 320 kênh
-        # Qua Conv3×3 → 2 kênh ab → Tanh
         self.head = nn.Sequential(
             nn.Conv2d(64 + 192 + fpn_channels, 2, kernel_size=3, padding=1, bias=False),
             nn.Tanh()
@@ -289,26 +290,24 @@ class UNetMSAttnGenerator(nn.Module):
         m2 = self.msa2([m1, d2, d3])  # (B,192,64,64)
         m3 = self.msa3([m2, d3, d4])  # (B,192,128,128)
 
-        # 5) Upsample m3 về 256×256
-        m3_up = F.interpolate(m3, size=d4.shape[2:], mode='bilinear', align_corners=False)  # (B,192,256,256)
+        # ---------------------- Upsample m3 ----------------------
+        m3_up = self.m3_up(m3)        # (B,192,256,256)
 
         # ---------------------- FPN Top-Down Add Fusion ----------------------
         p5 = self.lat5(x5)     # (B,64,16,16)
         p4 = self.lat4(x4) + F.interpolate(p5, size=x4.shape[2:], mode='bilinear', align_corners=False)
-        p4 = F.relu(p4)        # (B,64,32,32)
+        p4 = F.relu(p4)        
         p3 = self.lat3(x3) + F.interpolate(p4, size=x3.shape[2:], mode='bilinear', align_corners=False)
-        p3 = F.relu(p3)        # (B,64,64,64)
+        p3 = F.relu(p3)        
         p2 = self.lat2(x2) + F.interpolate(p3, size=x2.shape[2:], mode='bilinear', align_corners=False)
-        p2 = F.relu(p2)        # (B,64,128,128)
+        p2 = F.relu(p2)        
 
-        # Upsample p2 lên 256×256 (giống độ phân giải d4/m3_up)
         fpn_up = F.interpolate(p2, size=d4.shape[2:], mode='bilinear', align_corners=False)  # (B,64,256,256)
 
         # ---------------------- Head Kết hợp ----------------------
         feat = torch.cat([d4, m3_up, fpn_up], dim=1)  # (B, 64 + 192 + 64 = 320, 256, 256)
         out = self.head(feat)                         # (B, 2, 256, 256)
         return out
-
 
 
 def init_weights_Generator(m):
