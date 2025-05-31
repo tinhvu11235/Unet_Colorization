@@ -39,6 +39,9 @@ def save_checkpoint_as_artifact(epoch, model, run_id, artifact_base_name="checkp
 def log_image_wandb(L, ab, num=5, captions=None):
     L = L.cpu().detach().numpy()
     ab = ab.cpu().detach().numpy()
+    B = L_numpy.shape[0]
+    if B < num:
+        num = B
     wandb_image = []
     for i in range(num):
         image = lab_to_rgb(L[i], ab[i])
