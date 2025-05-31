@@ -392,7 +392,7 @@ class GANLoss(nn.Module):
 
 class GAN(nn.Module):
     def __init__(self, lr_G=2e-4, lr_D=1e-4, beta1=0.5, beta2=0.999,
-                 lambda_L1=100.0, lambda_perc=0.01):
+                 lambda_L1=100.0, lambda_perc=0.1):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
