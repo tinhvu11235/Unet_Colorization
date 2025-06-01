@@ -14,7 +14,7 @@ Config = {
     "VAL_SIZE": None,
     "WANDB_PROJECT": "image-colorization-123k-img-version5",
     "WANDB_RUN_NAME": "Unet-GAN",
-    "LOG_INTERVAL": 8000,
+    "LOG_INTERVAL": 600,
 }
 
 
