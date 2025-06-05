@@ -45,27 +45,65 @@ class PositionalEncoding2D(nn.Module):
         return x + self.pe
 
 
+
 class WindowAttention2D(nn.Module):
-    """Window-based multi-head self-attention."""
-    def __init__(self, embed_dim, num_heads, window_size):
+    """
+    Window-based multi-head self-attention với shifted window.
+    Nếu shift = 0, hoạt động y hệt WindowAttention2D gốc (non-overlapping).
+    Nếu shift = window_size // 2, nó sẽ trượt window trước khi tính attention,
+    rồi trượt ngược để ghép kết quả về đúng vị trí.
+    """
+
+    def __init__(self, embed_dim, num_heads, window_size, shift=True):
         super().__init__()
         self.window_size = window_size
+        self.shift_size = window_size // 2 if shift else 0
         self.mha = nn.MultiheadAttention(embed_dim, num_heads, batch_first=False)
 
     def forward(self, q, k, v):
+        """
+        q, k, v: đều là tensor kích thước (B, E, H, W)
+        Trả về: out (B, E, H, W)
+        """
         B, E, H, W = q.shape
         ws = self.window_size
-        q_win = rearrange(q, 'b e (h ws1) (w ws2) -> (b h w) (ws1 ws2) e', ws1=ws, ws2=ws)
-        k_win = rearrange(k, 'b e (h ws1) (w ws2) -> (b h w) (ws1 ws2) e', ws1=ws, ws2=ws)
-        v_win = rearrange(v, 'b e (h ws1) (w ws2) -> (b h w) (ws1 ws2) e', ws1=ws, ws2=ws)
+        ss = self.shift_size
+
+        # 1) Nếu cần shift, trượt cả q, k, v lên (-ss, -ss) (lên/qua hai chiều)
+        if ss > 0:
+            # lưu phần biên để padding (ở đây dùng circular shift)
+            # nếu không muốn circular, có thể chèn zeros hoặc mask, nhưng đơn giản dùng roll
+            q = torch.roll(q, shifts=(-ss, -ss), dims=(2, 3))
+            k = torch.roll(k, shifts=(-ss, -ss), dims=(2, 3))
+            v = torch.roll(v, shifts=(-ss, -ss), dims=(2, 3))
+
+        # 2) Chia window (non-overlapping) trên q, k, v
+        #    Mỗi window có kích thước ws×ws patch
+        #    rearrange thành (num_windows * B, ws*ws, E)
+        q_win = rearrange(q, 'b e (h ws1) (w ws2) -> (b h w) (ws1 ws2) e',
+                         ws1=ws, ws2=ws)
+        k_win = rearrange(k, 'b e (h ws1) (w ws2) -> (b h w) (ws1 ws2) e',
+                         ws1=ws, ws2=ws)
+        v_win = rearrange(v, 'b e (h ws1) (w ws2) -> (b h w) (ws1 ws2) e',
+                         ws1=ws, ws2=ws)
+
+        # 3) Tính multi-head attention bên trong từng window
+        #    Đổi shape để phù hợp nn.MultiheadAttention: (seq_len, batch, embed_dim)
         q2, k2, v2 = q_win.permute(1, 0, 2), k_win.permute(1, 0, 2), v_win.permute(1, 0, 2)
         attn_out, _ = self.mha(q2, k2, v2)
-        attn_out = attn_out.permute(1, 0, 2)
+        attn_out = attn_out.permute(1, 0, 2)  # trở về (num_windows*B, ws*ws, E)
+
+        # 4) Ghép các window đã attention về lại (B, E, H, W)
         out = rearrange(
             attn_out,
             '(b h w) (ws1 ws2) e -> b e (h ws1) (w ws2)',
             b=B, h=H // ws, w=W // ws, ws1=ws, ws2=ws
         )
+
+        # 5) Nếu đã shift trước đó, ta trượt ngược về (ss, ss)
+        if ss > 0:
+            out = torch.roll(out, shifts=(ss, ss), dims=(2, 3))
+
         return out
 
 
