@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+import torch.nn.functional as F
+
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
@@ -58,7 +60,6 @@ class UNetGenerator(nn.Module):
         x3 = self.enc2(x2)
         x4 = self.enc3(x3)
         x5 = self.enc4(x4)
-
         x = self.dec1(x5, x4)
         x = self.dec2(x, x3)
         x = self.dec3(x, x2)
@@ -74,41 +75,60 @@ class UNetGenerator(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
         return self
-    
-def get_encoder_weights(model_path='model.pth'):
- 
-    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
-    state_dict = checkpoint.get('model_state_dict', checkpoint)
-    
-    encoder_state_dict = {k: v for k, v in state_dict.items() 
-                          if k.startswith('input_layer') or k.startswith('enc')}
-    return encoder_state_dict 
 
-def load_trained_model(model_path='model.pth'):
-    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
-    model = UNetGenerator()
-    try:
-        model.load_state_dict(checkpoint['model_state_dict'])
-    except:
-        model.load_state_dict(checkpoint)
-    model.eval()
-    return model
+class GrayGenerator(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.input_layer = ConvBlock(2, 64)
+        self.enc1 = Encoder(64, 128)
+        self.enc2 = Encoder(128, 256)
+        self.enc3 = Encoder(256, 512)
+        self.enc4 = Encoder(512, 1024)
+        self.dec1 = Decoder(1024, 512)
+        self.dec2 = Decoder(512, 256)
+        self.dec3 = Decoder(256, 128)
+        self.dec4 = Decoder(128, 64)
+        self.output_layer = nn.Conv2d(64, 1, kernel_size=1)
+
+    def forward(self, ab):
+        x1 = self.input_layer(ab)
+        x2 = self.enc1(x1)
+        x3 = self.enc2(x2)
+        x4 = self.enc3(x3)
+        x5 = self.enc4(x4)
+        x = self.dec1(x5, x4)
+        x = self.dec2(x, x3)
+        x = self.dec3(x, x2)
+        x = self.dec4(x, x1)
+        x = self.output_layer(x)
+        return torch.tanh(x)
+
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        return self
 
 class PatchDiscriminator(nn.Module):
     def __init__(self, input_c, num_filters=64, n_down=3):
         super().__init__()
         model = [self.get_layers(input_c, num_filters, norm=False)]
-        model += [self.get_layers(num_filters * 2 ** i, num_filters * 2 ** (i + 1), s=1 if i == (n_down - 1) else 2) 
+        model += [self.get_layers(num_filters * 2 ** i, num_filters * 2 ** (i + 1),
+                                  s=1 if i == (n_down - 1) else 2)
                   for i in range(n_down)]
         model += [self.get_layers(num_filters * 2 ** n_down, 1, s=1, norm=False, act=False)]
         self.model = nn.Sequential(*model)
 
     def get_layers(self, ni, nf, k=4, s=2, p=1, norm=True, act=True):
         layers = [nn.Conv2d(ni, nf, k, s, p, bias=not norm)]
-        if norm: layers.append(nn.BatchNorm2d(nf))
-        if act: layers.append(nn.LeakyReLU(0.2, True))
+        if norm:
+            layers.append(nn.BatchNorm2d(nf))
+        if act:
+            layers.append(nn.LeakyReLU(0.2, True))
         return nn.Sequential(*layers)
-    
+
     def init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -119,6 +139,7 @@ class PatchDiscriminator(nn.Module):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
         return self
+
     def forward(self, x):
         return self.model(x)
 
@@ -133,10 +154,7 @@ class GANLoss(nn.Module):
             self.loss = nn.MSELoss()
 
     def get_labels(self, preds, target_is_real):
-        if target_is_real:
-            labels = self.real_label
-        else:
-            labels = self.fake_label
+        labels = self.real_label if target_is_real else self.fake_label
         return labels.expand_as(preds)
 
     def __call__(self, preds, target_is_real):
@@ -144,75 +162,169 @@ class GANLoss(nn.Module):
         loss = self.loss(preds, labels)
         return loss
 
+def _gaussian_window(window_size=11, sigma=1.5, channels=1, device='cpu'):
+    coords = torch.arange(window_size, dtype=torch.float32, device=device) - window_size // 2
+    g = torch.exp(-(coords ** 2) / (2 * sigma * sigma))
+    g = (g / g.sum()).unsqueeze(0)
+    w2d = (g.t() @ g).unsqueeze(0).unsqueeze(0)
+    w = w2d.repeat(channels, 1, 1, 1)
+    return w
 
+class SSIM(nn.Module):
+    def __init__(self, window_size=11, sigma=1.5):
+        super().__init__()
+        self.window_size = window_size
+        self.sigma = sigma
+
+    def forward(self, x, y):
+        x = (x + 1.0) * 0.5
+        y = (y + 1.0) * 0.5
+        C1 = 0.01 ** 2
+        C2 = 0.03 ** 2
+        b, c, h, w = x.shape
+        w_ = _gaussian_window(self.window_size, self.sigma, c, x.device)
+        mu_x = F.conv2d(x, w_, padding=self.window_size // 2, groups=c)
+        mu_y = F.conv2d(y, w_, padding=self.window_size // 2, groups=c)
+        mu_x2, mu_y2 = mu_x * mu_x, mu_y * mu_y
+        mu_xy = mu_x * mu_y
+        sigma_x2 = F.conv2d(x * x, w_, padding=self.window_size // 2, groups=c) - mu_x2
+        sigma_y2 = F.conv2d(y * y, w_, padding=self.window_size // 2, groups=c) - mu_y2
+        sigma_xy = F.conv2d(x * y, w_, padding=self.window_size // 2, groups=c) - mu_xy
+        ssim_map = ((2 * mu_xy + C1) * (2 * sigma_xy + C2)) / (
+                (mu_x2 + mu_y2 + C1) * (sigma_x2 + sigma_y2 + C2) + 1e-8)
+        return ssim_map.mean()
+
+class BlurAB(nn.Module):
+    def __init__(self, k=3, sigma=1.0, p=0.5):
+        super().__init__()
+        self.p = p
+        coords = torch.arange(k, dtype=torch.float32) - k // 2
+        g = torch.exp(-(coords ** 2) / (2 * sigma * sigma))
+        g = (g / g.sum()).view(1, 1, -1)
+        k2d = g.transpose(1, 2) @ g
+        self.register_buffer('weight', k2d.unsqueeze(0).repeat(2, 1, 1, 1))
+        self.pad = k // 2
+
+    def forward(self, ab):
+        if self.training and torch.rand(()) < self.p:
+            return F.conv2d(ab, self.weight, padding=self.pad, groups=2)
+        return ab
+
+def tv_loss(x):
+    dx = (x[:, :, :, 1:] - x[:, :, :, :-1]).abs().mean()
+    dy = (x[:, :, 1:, :] - x[:, :, :-1, :]).abs().mean()
+    return dx + dy
+
+def get_encoder_weights(model_path='model.pth'):
+    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+    state_dict = checkpoint.get('model_state_dict', checkpoint)
+    encoder_state_dict = {k: v for k, v in state_dict.items()
+                          if k.startswith('input_layer') or k.startswith('enc')}
+    return encoder_state_dict
+
+def load_trained_model(model_path='model.pth'):
+    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+    model = UNetGenerator()
+    try:
+        model.load_state_dict(checkpoint['model_state_dict'])
+    except:
+        model.load_state_dict(checkpoint)
+    model.eval()
+    return model
 class GAN(nn.Module):
-    def __init__(self, lr_G=2e-4, lr_D=1e-4, beta1=0.5, beta2=0.999, lambda_L1=100.):
+    def __init__(self, lr_G=2e-4, lr_D=1e-4, beta1=0.5, beta2=0.999, lambda_L1=100., lambda_cycle=10., tv_weight=0.1, blur_k=3, blur_sigma=1.0, blur_p=0.5, noise_std=0.0):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_L1 = lambda_L1
+        self.lambda_cycle = lambda_cycle
+        self.tv_weight = tv_weight
+        self.noise_std = noise_std
         self.net_G = UNetGenerator().init_weights().to(self.device)
+        self.net_F = GrayGenerator().init_weights().to(self.device)
         self.net_D = PatchDiscriminator(input_c=3).init_weights().to(self.device)
         self.GANcriterion = GANLoss(gan_mode='vanilla').to(self.device)
         self.L1criterion = nn.L1Loss()
+        self.SSIMcriterion = SSIM()
         self.opt_G = optim.Adam(self.net_G.parameters(), lr=lr_G, betas=(beta1, beta2))
+        self.opt_F = optim.Adam(self.net_F.parameters(), lr=lr_G, betas=(beta1, beta2))
         self.opt_D = optim.Adam(self.net_D.parameters(), lr=lr_D, betas=(beta1, beta2))
-        self.scheduler_G = ReduceLROnPlateau(self.opt_G,mode='min',factor=0.95,patience=5,verbose=True)
+        self.scheduler_G = ReduceLROnPlateau(self.opt_G, mode='min', factor=0.95, patience=5, verbose=True)
+        self.scheduler_F = ReduceLROnPlateau(self.opt_F, mode='min', factor=0.95, patience=5, verbose=True)
+        self.blur_ab = BlurAB(k=blur_k, sigma=blur_sigma, p=blur_p)
+    def _quantize_ste(self, x, step=1/64.0):
+        y = torch.round(x / step) * step
+        return (y - x).detach() + x
     def set_requires_grad(self, model, requires_grad=True):
         for p in model.parameters():
             p.requires_grad = requires_grad
-
     def setup_input(self, data):
-        self.L = data['L'].to(self.device)
+        self.L  = data['L'].to(self.device)
         self.ab = data['ab'].to(self.device)
-
     def forward(self):
         self.fake_color = self.net_G(self.L)
-
-    def backward_D(self, noGAN = False):
+        ab_for_F = self.blur_ab(self.fake_color)
+        if self.noise_std > 0 and self.training:
+            ab_for_F = ab_for_F + self.noise_std * torch.randn_like(ab_for_F)
+        ab_for_F = self._quantize_ste(ab_for_F, step=1/64.0)
+        self.rec_L = self.net_F(ab_for_F)
+    def backward_D(self, noGAN=False):
         fake_image = torch.cat([self.L, self.fake_color], dim=1)
         fake_preds = self.net_D(fake_image.detach())
         if noGAN:
             self.loss_D_fake = torch.tensor(0.0, device=self.L.device)
             self.loss_D_real = torch.tensor(0.0, device=self.L.device)
             self.loss_D = torch.tensor(0.0, device=self.L.device)
-            return 
+            return
         self.loss_D_fake = self.GANcriterion(fake_preds, False)
         real_image = torch.cat([self.L, self.ab], dim=1)
         real_preds = self.net_D(real_image)
         self.loss_D_real = self.GANcriterion(real_preds, True)
-        self.loss_D = (self.loss_D_fake + self.loss_D_real) * 0.5
+        self.loss_D = 0.5 * (self.loss_D_fake + self.loss_D_real)
         self.loss_D.backward()
-
     def backward_G(self):
         fake_image = torch.cat([self.L, self.fake_color], dim=1)
         fake_preds = self.net_D(fake_image)
         self.loss_G_GAN = self.GANcriterion(fake_preds, True)
         self.loss_G_L1 = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
-        self.loss_G = self.loss_G_GAN + self.loss_G_L1
+        ssim_val = self.SSIMcriterion(self.rec_L, self.L)
+        self.loss_cycle = (1.0 - ssim_val) * self.lambda_cycle
+        self.loss_tv = self.tv_weight * tv_loss(self.fake_color) if self.tv_weight > 0 else torch.tensor(0.0, device=self.L.device)
+        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_cycle + self.loss_tv
         self.loss_G.backward()
-
     def warmup_optimize(self):
         self.forward()
-        self.net_G.train()
+        self.net_G.train(); self.net_F.train()
         self.set_requires_grad(self.net_D, False)
         self.opt_G.zero_grad()
-        self.loss_G_L1 = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
-        self.loss_G_L1.backward()
+        loss_L1 = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
+        ssim_val = self.SSIMcriterion(self.rec_L, self.L)
+        loss_cyc = (1.0 - ssim_val) * self.lambda_cycle
+        loss_tv = self.tv_weight * tv_loss(self.fake_color) if self.tv_weight > 0 else 0.0
+        (loss_L1 + loss_cyc + loss_tv).backward()
         self.opt_G.step()
-
+        self.opt_F.zero_grad()
+        ab_for_F = self.blur_ab(self.fake_color.detach())
+        if self.noise_std > 0 and self.training:
+            ab_for_F = ab_for_F + self.noise_std * torch.randn_like(ab_for_F)
+        ab_for_F = self._quantize_ste(ab_for_F, step=1/64.0)
+        rec_L_det = self.net_F(ab_for_F)
+        ssim_val2 = self.SSIMcriterion(rec_L_det, self.L)
+        loss_cyc_F = (1.0 - ssim_val2) * self.lambda_cycle
+        loss_cyc_F.backward()
+        self.opt_F.step()
     def optimize(self):
         self.forward()
         self.net_D.train()
         self.set_requires_grad(self.net_D, True)
         self.opt_D.zero_grad()
-        self.backward_D(noGAN = False)
+        self.backward_D(noGAN=False)
         self.opt_D.step()
-
-        self.net_G.train()
+        self.net_G.train(); self.net_F.train()
         self.set_requires_grad(self.net_D, False)
-        self.opt_G.zero_grad()
+        self.opt_G.zero_grad(); self.opt_F.zero_grad()
         self.backward_G()
-        self.opt_G.step()
+        self.opt_G.step(); self.opt_F.step()
+
 
 def pretrain_discriminator(train_dl, gan_model, lr=2e-5, epochs=3):
     print("Pretraining Discriminator...")
