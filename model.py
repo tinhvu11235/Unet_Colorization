@@ -206,8 +206,9 @@ class BlurAB(nn.Module):
         self.pad = k // 2
 
     def forward(self, ab):
-        if self.training and torch.rand(()) < self.p:
-            return F.conv2d(ab, self.weight, padding=self.pad, groups=2)
+        if self.training and torch.rand((), device=ab.device) < self.p:
+            w = self.weight.to(device=ab.device, dtype=ab.dtype)
+            return F.conv2d(ab, w, padding=self.pad, groups=ab.shape[1])
         return ab
 
 def tv_loss(x):
@@ -250,7 +251,7 @@ class GAN(nn.Module):
         self.opt_D = optim.Adam(self.net_D.parameters(), lr=lr_D, betas=(beta1, beta2))
         self.scheduler_G = ReduceLROnPlateau(self.opt_G, mode='min', factor=0.95, patience=5, verbose=True)
         self.scheduler_F = ReduceLROnPlateau(self.opt_F, mode='min', factor=0.95, patience=5, verbose=True)
-        self.blur_ab = BlurAB(k=blur_k, sigma=blur_sigma, p=blur_p)
+        self.blur_ab = BlurAB(k=blur_k, sigma=blur_sigma, p=blur_p).to(self.device)
     def _quantize_ste(self, x, step=1/64.0):
         y = torch.round(x / step) * step
         return (y - x).detach() + x
