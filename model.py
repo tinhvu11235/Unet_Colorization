@@ -3,11 +3,17 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision import models, transforms
+import torch.optim as optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import DataLoader
+import torchvision
+from torchvision import transforms
 from einops import rearrange
 from skimage.color import lab2rgb
 import warnings
 
+
+# ======== POSITIONAL ENCODING ========
 class PositionalEncoding2D(nn.Module):
     def __init__(self, embed_dim, height, width):
         super().__init__()
@@ -34,6 +40,8 @@ class PositionalEncoding2D(nn.Module):
     def forward(self, x):
         return x + self.pe
 
+
+# ======== WINDOW ATTENTION ========
 class WindowAttention2D(nn.Module):
     def __init__(self, embed_dim, num_heads, window_size, shift=True):
         super().__init__()
@@ -65,6 +73,7 @@ class WindowAttention2D(nn.Module):
         return out
 
 
+# ======== CONV BLOCKS ========
 class ConvBlock(nn.Module):
     def __init__(self, in_c, out_c):
         super().__init__()
@@ -103,8 +112,10 @@ class Decoder(nn.Module):
             x = F.interpolate(x, size=skip.shape[2:], mode='bilinear', align_corners=False)
         return self.conv(torch.cat([x, skip], dim=1))
 
+
+# ======== MULTI-SCALE ATTENTION ========
 class MultiScaleAttentionBlock(nn.Module):
-    def __init__(self, in_ch, embed_dim, heads, window_size, save_mode=True):
+    def __init__(self, in_ch, embed_dim, heads, window_size):
         super().__init__()
         self.embed_dim = embed_dim
         self.kp = nn.Conv2d(in_ch[0], embed_dim, 1, bias=False)
@@ -136,6 +147,8 @@ class MultiScaleAttentionBlock(nn.Module):
         skip = self.sp(d1)
         return self.post(torch.cat([attn_out, skip], dim=1))
 
+
+# ======== GENERATOR ========
 class UNetMSAttnGenerator(nn.Module):
     def __init__(self, window_size=8):
         super().__init__()
@@ -177,6 +190,9 @@ class UNetMSAttnGenerator(nn.Module):
         m3_up = self.m3_up(m3)
         feat = torch.cat([d4, m3_up], dim=1)
         return self.head(feat)
+
+
+# ======== INITIALIZATION ========
 def init_weights_Generator(m):
     if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
         nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
@@ -190,11 +206,14 @@ def init_weights_Generator(m):
         nn.init.zeros_(m.bias)
 
 
+# ======== DISCRIMINATOR ========
 class PatchDiscriminator(nn.Module):
     def __init__(self, input_c, num_filters=64, n_down=3):
         super().__init__()
         model = [self.get_layers(input_c, num_filters, norm=False)]
-        model += [self.get_layers(num_filters * 2 ** i, num_filters * 2 ** (i + 1), s=1 if i == (n_down - 1) else 2) for i in range(n_down)]
+        model += [self.get_layers(num_filters * 2 ** i, num_filters * 2 ** (i + 1),
+                                  s=1 if i == (n_down - 1) else 2)
+                  for i in range(n_down)]
         model += [self.get_layers(num_filters * 2 ** n_down, 1, s=1, norm=False, act=False)]
         self.model = nn.Sequential(*model)
 
@@ -221,6 +240,7 @@ class PatchDiscriminator(nn.Module):
         return self.model(x)
 
 
+# ======== LAB to RGB UTILITY ========
 def lab_to_rgb(L, ab):
     L = (L + 1.) * 50.
     ab = ab * 110.
@@ -231,6 +251,7 @@ def lab_to_rgb(L, ab):
     return rgb
 
 
+# ======== GAN LOSS ========
 class GANLoss(nn.Module):
     def __init__(self, gan_mode='vanilla', real_label=1.0, fake_label=0.0):
         super().__init__()
@@ -249,12 +270,12 @@ class GANLoss(nn.Module):
         return self.loss(preds, labels)
 
 
+# ======== GAN MODEL ========
 class GAN(nn.Module):
-    def __init__(self, lr_G=2e-4, lr_D=1e-4, beta1=0.5, beta2=0.999, lambda_L1=100.0, lambda_perc=0.01):
+    def __init__(self, lr_G=2e-4, lr_D=1e-4, beta1=0.5, beta2=0.999, lambda_L1=100.0):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_L1 = lambda_L1
-        self.lambda_perc = lambda_perc
         self.net_G = UNetMSAttnGenerator().to(self.device).apply(init_weights_Generator)
         self.net_D = PatchDiscriminator(input_c=3).init_weights().to(self.device)
         self.GANcriterion = GANLoss(gan_mode='vanilla').to(self.device)
@@ -262,11 +283,6 @@ class GAN(nn.Module):
         self.opt_G = optim.Adam(self.net_G.parameters(), lr=lr_G, betas=(beta1, beta2))
         self.opt_D = optim.Adam(self.net_D.parameters(), lr=lr_D, betas=(beta1, beta2))
         self.scheduler_G = ReduceLROnPlateau(self.opt_G, mode='min', factor=0.95, patience=5, verbose=True)
-        vgg_full = torchvision.models.vgg16(pretrained=True).features
-        self.vgg = nn.Sequential(*list(vgg_full.children())[:16]).to(self.device).eval()
-        for param in self.vgg.parameters():
-            param.requires_grad = False
-        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
     def set_requires_grad(self, model, requires_grad=True):
         for p in model.parameters():
@@ -283,13 +299,11 @@ class GAN(nn.Module):
         fake_image = torch.cat([self.L, self.fake_color], dim=1)
         fake_preds = self.net_D(fake_image.detach())
         if noGAN:
-            self.loss_D_fake = torch.tensor(0.0, device=self.L.device)
-            self.loss_D_real = torch.tensor(0.0, device=self.L.device)
             self.loss_D = torch.tensor(0.0, device=self.L.device)
             return
-        self.loss_D_fake = self.GANcriterion(fake_preds, False)
         real_image = torch.cat([self.L, self.ab], dim=1)
         real_preds = self.net_D(real_image)
+        self.loss_D_fake = self.GANcriterion(fake_preds, False)
         self.loss_D_real = self.GANcriterion(real_preds, True)
         self.loss_D = 0.5 * (self.loss_D_fake + self.loss_D_real)
         self.loss_D.backward()
@@ -299,8 +313,7 @@ class GAN(nn.Module):
         fake_preds = self.net_D(fake_image)
         self.loss_G_GAN = self.GANcriterion(fake_preds, True)
         self.loss_G_L1 = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
-        self.loss_G_perc = self._perceptual_loss(self.fake_color, self.ab) * self.lambda_perc
-        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_perc
+        self.loss_G = self.loss_G_GAN + self.loss_G_L1
         self.loss_G.backward()
 
     def warmup_optimize(self):
@@ -314,75 +327,15 @@ class GAN(nn.Module):
 
     def optimize(self):
         self.forward()
+        # Train Discriminator
         self.net_D.train()
         self.set_requires_grad(self.net_D, True)
         self.opt_D.zero_grad()
         self.backward_D(noGAN=False)
         self.opt_D.step()
+        # Train Generator
         self.net_G.train()
         self.set_requires_grad(self.net_D, False)
         self.opt_G.zero_grad()
         self.backward_G()
         self.opt_G.step()
-
-    def _perceptual_loss(self, fake_ab, real_ab):
-        B, _, H, W = fake_ab.shape
-        fake_rgb_list, real_rgb_list = [], []
-        L_cpu = self.L.detach().cpu().numpy()
-        fake_ab_cpu = fake_ab.detach().cpu().numpy()
-        real_ab_cpu = real_ab.detach().cpu().numpy()
-        for i in range(B):
-            L_i = L_cpu[i]
-            fake_ab_i = fake_ab_cpu[i]
-            real_ab_i = real_ab_cpu[i]
-            fake_rgb_np = lab_to_rgb(L_i, fake_ab_i)
-            real_rgb_np = lab_to_rgb(L_i, real_ab_i)
-            fake_rgb_tensor = torch.from_numpy(fake_rgb_np.transpose(2,0,1)).unsqueeze(0).float().to(self.device)
-            real_rgb_tensor = torch.from_numpy(real_rgb_np.transpose(2,0,1)).unsqueeze(0).float().to(self.device)
-            fake_rgb_list.append(fake_rgb_tensor)
-            real_rgb_list.append(real_rgb_tensor)
-        fake_rgb_batch = torch.cat(fake_rgb_list, dim=0)
-        real_rgb_batch = torch.cat(real_rgb_list, dim=0)
-        fake_norm = torch.zeros_like(fake_rgb_batch)
-        real_norm = torch.zeros_like(real_rgb_batch)
-        for j in range(B):
-            fake_norm[j] = self.normalize(fake_rgb_batch[j])
-            real_norm[j] = self.normalize(real_rgb_batch[j])
-        loss_perc = torch.tensor(0.0, device=self.device)
-        x_fake = fake_norm
-        x_real = real_norm
-        for idx, layer in enumerate(self.vgg):
-            x_fake = layer(x_fake)
-            x_real = layer(x_real)
-            if idx in [8, 15]:
-                loss_perc = loss_perc + F.l1_loss(x_fake, x_real)
-        return loss_perc
-
-
-def pretrain_discriminator(train_dl, gan_model, lr=2e-5, epochs=3):
-    shuffled_train_dl = DataLoader(
-        dataset=train_dl.dataset,
-        batch_size=train_dl.batch_size,
-        shuffle=True,
-        num_workers=train_dl.num_workers,
-        pin_memory=train_dl.pin_memory,
-        drop_last=train_dl.drop_last if hasattr(train_dl, 'drop_last') else False,
-        collate_fn=train_dl.collate_fn if hasattr(train_dl, 'collate_fn') else None
-    )
-    gan_model.net_D.train()
-    gan_model.set_requires_grad(gan_model.net_D, True)
-    for epoch in range(epochs):
-        running_loss = 0.0
-        real_loss = 0.0
-        fake_loss = 0.0
-        for data in shuffled_train_dl:
-            gan_model.setup_input(data)
-            with torch.no_grad():
-                gan_model.forward()
-            gan_model.opt_D.zero_grad()
-            gan_model.backward_D()
-            gan_model.opt_D.step()
-            running_loss += gan_model.loss_D.item()
-            real_loss += gan_model.loss_D_real.item()
-            fake_loss += gan_model.loss_D_fake.item()
-        print(f"Epoch [{epoch + 1}/{epochs}], Running Loss: {running_loss / len(shuffled_train_dl):.4f}, Real Loss: {real_loss / len(shuffled_train_dl):.4f}, Fake Loss: {fake_loss / len(shuffled_train_dl):.4f}")

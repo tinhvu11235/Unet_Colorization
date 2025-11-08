@@ -150,7 +150,6 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
         running_loss_D       = 0.0
         running_loss_G_GAN   = 0.0
         running_loss_G_L1    = 0.0
-        running_loss_G_perc  = 0.0
         running_loss_D_fake  = 0.0
         running_loss_D_real  = 0.0
         step = 0
@@ -162,7 +161,6 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
 
             running_loss_G_GAN  += GAN_model.loss_G_GAN.item()
             running_loss_G_L1   += GAN_model.loss_G_L1.item()
-            running_loss_G_perc += GAN_model.loss_G_perc.item()
             running_loss_G      += GAN_model.loss_G.item()
 
             running_loss_D_fake += GAN_model.loss_D_fake.item()      if hasattr(GAN_model, 'loss_D_fake') else 0.0
@@ -193,14 +191,12 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
                     "train/real_fix": real_fix,
                     "train/fake_rand": fake_rand,
                     "train/real_rand": real_rand,
-                    "train/step/loss_G_perc": GAN_model.loss_G_perc.item(),
                 }, commit=False)
 
         num_batches = len(train_dl)
         avg_loss_G       = running_loss_G / num_batches
         avg_loss_G_GAN   = running_loss_G_GAN / num_batches
         avg_loss_G_L1    = running_loss_G_L1 / num_batches
-        avg_loss_G_perc  = running_loss_G_perc / num_batches
         avg_loss_D_fake  = running_loss_D_fake / num_batches
         avg_loss_D_real  = running_loss_D_real / num_batches
         avg_loss_D       = running_loss_D / num_batches
@@ -227,7 +223,6 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
             "epoch/loss_G": avg_loss_G,
             "epoch/loss_G_GAN": avg_loss_G_GAN,
             "epoch/loss_G_L1": avg_loss_G_L1,
-            "epoch/loss_G_perc": avg_loss_G_perc,
             "epoch/loss_D": avg_loss_D,
             "epoch/loss_D_fake": avg_loss_D_fake,
             "epoch/loss_D_real": avg_loss_D_real,
@@ -241,7 +236,6 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
 
         print(f"Epoch {epoch+1}/{epochs} — "
               f"train L1: {avg_loss_G_L1:.4f}, "
-              f"train Perc: {avg_loss_G_perc:.4f}, "
               f"val  L1: {val_L1:.4f}")
 
         save_checkpoint_as_artifact(epoch, GAN_model, wandb.run.id, artifact_base_name="checkpoint")
@@ -265,7 +259,6 @@ def train_from_scratch():
     net_GAN = GAN(
         lr_G=cfg["LR_G"],
         lr_D=cfg["LR_D"],
-
     )
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
