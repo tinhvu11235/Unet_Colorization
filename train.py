@@ -267,18 +267,30 @@ def train_from_scratch():
 
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"], checkpoint_path=None)
 
+import urllib.parse
+import tempfile
+
 def train_from_checkpoint(path):
     if not path.startswith("http"):
-        raise ValueError(f"Invalid URL: {path}")
-
-    checkpoint_url = path
-    checkpoint_file = os.path.join(".", os.path.basename(checkpoint_url))
-    response = requests.get(checkpoint_url)
-    if response.status_code == 200:
-        with open(checkpoint_file, "wb") as f:
-            f.write(response.content)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Checkpoint file not found: {path}")
+        checkpoint_file = path
+        print(f"Loading checkpoint locally from {checkpoint_file}")
     else:
-        raise ValueError(f"Failed to download checkpoint from {checkpoint_url}")
+        checkpoint_url = path
+        parsed = urllib.parse.urlparse(checkpoint_url)
+        filename = os.path.basename(parsed.path)
+        if not filename.endswith(".pth"):
+            filename += ".pth"
+        checkpoint_file = os.path.join(tempfile.gettempdir(), filename)
+        print(f"Downloading checkpoint from {checkpoint_url} ...")
+        response = requests.get(checkpoint_url, timeout=30)
+        if response.status_code == 200:
+            with open(checkpoint_file, "wb") as f:
+                f.write(response.content)
+            print(f"Checkpoint saved to temporary file: {checkpoint_file}")
+        else:
+            raise ValueError(f"Failed to download checkpoint from {checkpoint_url}")
 
     train_dl, val_dl = create_dataloaders(
         cfg["TRAIN_DATASET_PATH"],
@@ -289,8 +301,5 @@ def train_from_checkpoint(path):
         cfg["VAL_SIZE"]
     )
 
-    net_GAN = GAN(
-        lr_G=cfg["LR_G"],
-        lr_D=cfg["LR_D"],
-    )
+    net_GAN = GAN(lr_G=cfg["LR_G"], lr_D=cfg["LR_D"])
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"], checkpoint_path=checkpoint_file)
