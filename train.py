@@ -116,10 +116,15 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
         for warmup_epoch in range(warmup_epochs):
             step_warmup = 0
             loop_w = tqdm(train_dl, desc=f"Warmup Epoch {warmup_epoch+1}/{warmup_epochs}")
-            for data in loop_w:
+            accum_steps = 4 
+            for step_warmup, data in enumerate(loop_w):
                 GAN_model.setup_input(data)
-                GAN_model.warmup_optimize()
-                step_warmup += 1
+                GAN_model.forward()
+                GAN_model.backward_G_warm_up()
+                if (step_warmup + 1) % accum_steps == 0:
+                    GAN_model.opt_G.zero_grad(set_to_none=True)
+                    GAN_model.opt_G.step()
+                
                 if step_warmup % log_interval == 0:
                     with torch.no_grad():
                         bs = cfg["BATCH_SIZE"]
@@ -157,27 +162,17 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
         GAN_model.net_D.train()
         GAN_model.opt_G.zero_grad(set_to_none=True)
         GAN_model.opt_D.zero_grad(set_to_none=True)
-
-        for data in loop:
+        accum_steps = 4
+        for step, data in enumerate(loop):
             GAN_model.setup_input(data)
             GAN_model.forward()
 
             GAN_model.set_requires_grad(GAN_model.net_D, True)
-            fake_image = torch.cat([GAN_model.L, GAN_model.fake_color], dim=1)
-            real_image = torch.cat([GAN_model.L, GAN_model.ab], dim=1)
-            pred_fake = GAN_model.net_D(fake_image.detach())
-            pred_real = GAN_model.net_D(real_image)
-            loss_D_fake = GAN_model.GANcriterion(pred_fake, torch.zeros_like(pred_fake))
-            loss_D_real = GAN_model.GANcriterion(pred_real, torch.ones_like(pred_real))
-            loss_D = 0.5 * (loss_D_fake + loss_D_real) / accum_steps
-            loss_D.backward()
+            GAN_model.backward_D()
+
 
             GAN_model.set_requires_grad(GAN_model.net_D, False)
-            pred_fake_G = GAN_model.net_D(fake_image)
-            loss_G_GAN = GAN_model.GANcriterion(pred_fake_G, torch.ones_like(pred_fake_G))
-            loss_G_L1 = GAN_model.L1criterion(GAN_model.fake_color, GAN_model.ab) * GAN_model.lambda_L1
-            loss_G = (loss_G_GAN + loss_G_L1) / accum_steps
-            loss_G.backward()
+            GAN_model.backward_G()
 
             if (step + 1) % accum_steps == 0:
                 GAN_model.opt_D.step()
@@ -185,13 +180,12 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
                 GAN_model.opt_D.zero_grad(set_to_none=True)
                 GAN_model.opt_G.zero_grad(set_to_none=True)
 
-            running_loss_G_GAN += loss_G_GAN.item()
-            running_loss_G_L1 += loss_G_L1.item()
-            running_loss_G += loss_G.item()
-            running_loss_D_fake += loss_D_fake.item()
-            running_loss_D_real += loss_D_real.item()
-            running_loss_D += loss_D.item()
-            step += 1
+            running_loss_G_GAN += GAN_model.loss_G_GAN.item()
+            running_loss_G_L1  += GAN_model.loss_G_L1.item()
+            running_loss_G     += GAN_model.loss_G.item()
+            running_loss_D_fake += GAN_model.loss_D_fake.item()
+            running_loss_D_real += GAN_model.loss_D_real.item()
+            running_loss_D     += GAN_model.loss_D.item()
 
             if step % log_interval == 0:
                 with torch.no_grad():

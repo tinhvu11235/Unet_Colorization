@@ -178,43 +178,56 @@ class GAN(nn.Module):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_L1 = lambda_L1
+
         self.net_G = UNetMSAttnGenerator().to(self.device)
         self.net_D = PatchDiscriminator(3).to(self.device)
+
         self.GANcriterion = nn.BCEWithLogitsLoss()
         self.L1criterion = nn.L1Loss()
+
         self.opt_G = torch.optim.Adam(self.net_G.parameters(), lr=lr_G, betas=(beta1, beta2))
         self.opt_D = torch.optim.Adam(self.net_D.parameters(), lr=lr_D, betas=(beta1, beta2))
 
+        # Scheduler cho Generator
+        self.scheduler_G = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.opt_G, mode='min', factor=0.5, patience=5, verbose=True
+        )
+
+    def set_requires_grad(self, model, flag=True):
+        for p in model.parameters():
+            p.requires_grad = flag
+
     def setup_input(self, data):
-        self.L = data['L'].to(self.device)      # (B,1,256,256)
-        self.ab = data['ab'].to(self.device)    # (B,2,256,256)
+        self.L = data['L'].to(self.device)
+        self.ab = data['ab'].to(self.device)
 
     def forward(self):
-        self.fake_color = self.net_G(self.L)    # (B,2,256,256)
+        self.fake_color = self.net_G(self.L)
 
     def backward_D(self):
         fake_image = torch.cat([self.L, self.fake_color], dim=1)
         real_image = torch.cat([self.L, self.ab], dim=1)
+
         pred_real = self.net_D(real_image)
         pred_fake = self.net_D(fake_image.detach())
-        loss_real = self.GANcriterion(pred_real, torch.ones_like(pred_real))
-        loss_fake = self.GANcriterion(pred_fake, torch.zeros_like(pred_fake))
-        self.loss_D = 0.5 * (loss_real + loss_fake)
+
+        self.loss_D_real = self.GANcriterion(pred_real, torch.ones_like(pred_real))
+        self.loss_D_fake = self.GANcriterion(pred_fake, torch.zeros_like(pred_fake))
+        self.loss_D = 0.5 * (self.loss_D_real + self.loss_D_fake)
+
         self.loss_D.backward()
 
     def backward_G(self):
         fake_image = torch.cat([self.L, self.fake_color], dim=1)
         pred_fake = self.net_D(fake_image)
-        loss_G_GAN = self.GANcriterion(pred_fake, torch.ones_like(pred_fake))
-        loss_G_L1 = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
-        self.loss_G = loss_G_GAN + loss_G_L1
+
+        self.loss_G_GAN = self.GANcriterion(pred_fake, torch.ones_like(pred_fake))
+        self.loss_G_L1  = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
+        self.loss_G = self.loss_G_GAN + self.loss_G_L1
+
         self.loss_G.backward()
 
-    def optimize(self):
-        self.forward()
-        self.opt_D.zero_grad()
-        self.backward_D()
-        self.opt_D.step()
-        self.opt_G.zero_grad()
-        self.backward_G()
-        self.opt_G.step()
+    def backward_G_warm_up(self):
+        self.loss_G_L1  = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
+        self.loss_G = self.loss_G_L1
+        self.loss_G.backward()
