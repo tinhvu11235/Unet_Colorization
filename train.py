@@ -73,7 +73,7 @@ def evaluate_L1_on_val(GAN_model, val_dl):
     return avg_L1
 
 
-def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, warmup_epochs=3):
+def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, warmup_epochs=0):
     epochs = cfg["EPOCHS"]
     start_epoch = 0
     run_id = None
