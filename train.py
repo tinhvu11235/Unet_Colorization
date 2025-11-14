@@ -116,7 +116,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
         for warmup_epoch in range(warmup_epochs):
             step_warmup = 0
             loop_w = tqdm(train_dl, desc=f"Warmup Epoch {warmup_epoch+1}/{warmup_epochs}")
-            accum_steps = 8 
+            accum_steps = 16 
             for step_warmup, data in enumerate(loop_w):
                 GAN_model.setup_input(data)
                 GAN_model.forward()
@@ -147,7 +147,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
                         "warmup/real_rand": real_rand,
                     })
 
-    accum_steps = 8
+    accum_steps = 16
     for epoch in range(start_epoch, epochs):
         running_loss_G = 0.0
         running_loss_D = 0.0
@@ -162,7 +162,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
         GAN_model.net_D.train()
         GAN_model.opt_G.zero_grad(set_to_none=True)
         GAN_model.opt_D.zero_grad(set_to_none=True)
-        accum_steps = 8
+        accum_steps = 16
         for step, data in enumerate(loop):
             GAN_model.setup_input(data)
             GAN_model.forward()
