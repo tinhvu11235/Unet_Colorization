@@ -174,7 +174,6 @@ def train_from_scratch(cfg):
         net_G, train_dl, val_dl,
         epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"],
         checkpoint_path=None,
-        save_dir=cfg["CHECKPOINT_DIR"],
         save_every=cfg.get("SAVE_EVERY", 1),
         save_best=cfg.get("SAVE_BEST", True)
     )
@@ -193,7 +192,6 @@ def continue_training(cfg, gdrive_id_or_url):
         net_G, train_dl, val_dl,
         epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"],
         checkpoint_path=local_ckpt,
-        save_dir=cfg["CHECKPOINT_DIR"],
         save_every=cfg.get("SAVE_EVERY", 1),
         save_best=cfg.get("SAVE_BEST", True)
     )
