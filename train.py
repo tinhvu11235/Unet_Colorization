@@ -169,7 +169,7 @@ def train_from_scratch(cfg):
         cfg["BATCH_SIZE"], cfg["NUM_WORKERS"],
         cfg["TRAIN_SIZE"], cfg["VAL_SIZE"]
     )
-    net_G = build_model.to(DEVICE)
+    net_G = build_model().to(DEVICE)
     train_model(
         net_G, train_dl, val_dl,
         epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"],
@@ -188,7 +188,7 @@ def continue_training(cfg, gdrive_id_or_url):
         cfg["BATCH_SIZE"], cfg["NUM_WORKERS"],
         cfg["TRAIN_SIZE"], cfg["VAL_SIZE"]
     )
-    net_G = build_model.to(DEVICE)
+    net_G = build_model().to(DEVICE)
     train_model(
         net_G, train_dl, val_dl,
         epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"],
