@@ -172,7 +172,7 @@ def train_from_scratch(cfg):
     net_G = build_model().to(DEVICE)
     train_model(
         net_G, train_dl, val_dl,
-        epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"],
+        epochs=cfg["EPOCHS"], lr=cfg["LR"],
         checkpoint_path=None,
     )
 
@@ -188,6 +188,6 @@ def continue_training(cfg, gdrive_id_or_url):
     net_G = build_model().to(DEVICE)
     train_model(
         net_G, train_dl, val_dl,
-        epochs=cfg["EPOCHS"], log_interval=1, lr=cfg["LR"],
+        epochs=cfg["EPOCHS"], lr=cfg["LR"],
         checkpoint_path=local_ckpt,
     )
