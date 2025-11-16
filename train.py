@@ -57,7 +57,7 @@ def download_ckpt_from_gdrive(gdrive_id_or_url, dst_dir):
         raise ValueError("Cannot download checkpoint from Google Drive.")
     return outfile
 
-def train_model_vae(net_G, train_dl, val_dl, epochs, lr,
+def train_model(net_G, train_dl, val_dl, epochs, lr,
                     beta_kl=1e-3,
                     checkpoint_path=None, save_dir="/kaggle/working/checkpoints",
                     save_every=1, save_best=True):
