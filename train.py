@@ -29,8 +29,10 @@ def ensure_dir(path):
 def get_ckpt_path(save_dir, epoch, prefix="checkpoint"):
     fname = f"{prefix}_epoch_{epoch}.pth"
     return os.path.join(save_dir, fname)
+
 def kl_loss(mu, logvar):
     return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
+
 def save_checkpoint_local(epoch, model, optimizer, scheduler, run_id, save_dir, best_val=None, is_best=False):
     ensure_dir(save_dir)
     payload = {
@@ -57,10 +59,23 @@ def download_ckpt_from_gdrive(gdrive_id_or_url, dst_dir):
         raise ValueError("Cannot download checkpoint from Google Drive.")
     return outfile
 
+def log_image_wandb(L, ab, num=5, captions=None):
+    L = L.cpu().detach().numpy()
+    ab = ab.cpu().detach().numpy()
+    B = L.shape[0]
+    if B < num:
+        num = B
+    wandb_images = []
+    for i in range(num):
+        rgb = lab_to_rgb(L[i], ab[i])
+        caption = captions[i] if captions is not None else f"Image {i}"
+        wandb_images.append(wandb.Image(rgb, caption=caption))
+    return wandb_images
+
 def train_model(net_G, train_dl, val_dl, epochs, lr,
-                    beta_kl=1e-3,
-                    checkpoint_path=None, save_dir="/kaggle/working/checkpoints",
-                    save_every=1, save_best=True):
+                beta_kl=1e-3,
+                checkpoint_path=None, save_dir="/kaggle/working/checkpoints",
+                save_every=1, save_best=True):
 
     optimizer = optim.Adam(net_G.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=5)
@@ -145,6 +160,33 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
         if ((epoch + 1) % save_every == 0) or is_best:
             save_checkpoint_local(epoch, net_G, optimizer, scheduler, run_id,
                                   save_dir, best_val=best_val, is_best=is_best)
+
+        with torch.no_grad():
+            data_fix = next(iter(val_dl))
+            L_fix = data_fix['L'].to(DEVICE)
+            ab_fix = data_fix['ab'].to(DEVICE)
+            fake_fix, _, _ = net_G(L_fix)
+
+            caps_fix = [f"epoch{epoch+1}_fix_{i}" for i in range(L_fix.size(0))]
+            wandb_fake_fix = log_image_wandb(L_fix, fake_fix, captions=caps_fix)
+            wandb_real_fix = log_image_wandb(L_fix, ab_fix, captions=caps_fix)
+
+            rand_idx = np.random.randint(0, len(val_dl))
+            data_rand = list(val_dl)[rand_idx]
+            L_r = data_rand['L'].to(DEVICE)
+            ab_r = data_rand['ab'].to(DEVICE)
+            fake_rand, _, _ = net_G(L_r)
+
+            caps_rand = [f"epoch{epoch+1}_rand_{i}" for i in range(L_r.size(0))]
+            wandb_fake_rand = log_image_wandb(L_r, fake_rand, num=5, captions=caps_rand)
+            wandb_real_rand = log_image_wandb(L_r, ab_r, num=5, captions=caps_rand)
+
+            wandb.log({
+                "images/fake_fix": wandb_fake_fix,
+                "images/real_fix": wandb_real_fix,
+                "images/fake_rand": wandb_fake_rand,
+                "images/real_rand": wandb_real_rand,
+            })
 
         wandb.log({
             "epoch": epoch + 1,
