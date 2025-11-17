@@ -73,7 +73,7 @@ def log_image_wandb(L, ab, num=5, captions=None):
     return wandb_images
 
 def train_model(net_G, train_dl, val_dl, epochs, lr,
-                beta_kl=1e-3,
+                beta_kl=1e-5,
                 checkpoint_path=None, save_dir="/kaggle/working/checkpoints",
                 save_every=1, save_best=True):
 
@@ -166,21 +166,28 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
             L_fix = data_fix['L'].to(DEVICE)
             ab_fix = data_fix['ab'].to(DEVICE)
             fake_fix, _, _ = net_G(L_fix)
-
-            caps_fix = [f"epoch{epoch+1}_fix_{i}" for i in range(L_fix.size(0))]
-            wandb_fake_fix = log_image_wandb(L_fix, fake_fix, captions=caps_fix)
-            wandb_real_fix = log_image_wandb(L_fix, ab_fix, captions=caps_fix)
-
-            rand_idx = np.random.randint(0, len(val_dl))
-            data_rand = list(val_dl)[rand_idx]
+    
+            L_fix_cpu = L_fix.detach().cpu()
+            ab_fix_cpu = ab_fix.detach().cpu()
+            fake_fix_cpu = fake_fix.detach().cpu()
+    
+            caps_fix = [f"epoch{epoch+1}_fix_{i}" for i in range(L_fix_cpu.size(0))]
+            wandb_fake_fix = log_image_wandb(L_fix_cpu, fake_fix_cpu, captions=caps_fix)
+            wandb_real_fix = log_image_wandb(L_fix_cpu, ab_fix_cpu, captions=caps_fix)
+    
+            data_rand = next(iter(val_dl))
             L_r = data_rand['L'].to(DEVICE)
             ab_r = data_rand['ab'].to(DEVICE)
             fake_rand, _, _ = net_G(L_r)
-
-            caps_rand = [f"epoch{epoch+1}_rand_{i}" for i in range(L_r.size(0))]
-            wandb_fake_rand = log_image_wandb(L_r, fake_rand, num=5, captions=caps_rand)
-            wandb_real_rand = log_image_wandb(L_r, ab_r, num=5, captions=caps_rand)
-
+    
+            L_r_cpu = L_r.detach().cpu()
+            ab_r_cpu = ab_r.detach().cpu()
+            fake_rand_cpu = fake_rand.detach().cpu()
+    
+            caps_rand = [f"epoch{epoch+1}_rand_{i}" for i in range(L_r_cpu.size(0))]
+            wandb_fake_rand = log_image_wandb(L_r_cpu, fake_rand_cpu, num=5, captions=caps_rand)
+            wandb_real_rand = log_image_wandb(L_r_cpu, ab_r_cpu, num=5, captions=caps_rand)
+    
             wandb.log({
                 "images/fake_fix": wandb_fake_fix,
                 "images/real_fix": wandb_real_fix,
