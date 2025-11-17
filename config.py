@@ -13,6 +13,7 @@ TRAIN_FROM_SCRATCH = {
     "VAL_SIZE": None,
     "WANDB_PROJECT": "image-colorization-123k-img",
     "WANDB_RUN_NAME": "Unet",
+    "CHECKPOINT_DIR": "/kaggle/working/",
 }
 
 CONTINUE_TRAINING = {
@@ -26,6 +27,7 @@ CONTINUE_TRAINING = {
     "VAL_SIZE": None,
     "WANDB_PROJECT": "image-colorization-123k-img",
     "WANDB_RUN_NAME": "Unet",
+    "CHECKPOINT_DIR": "/kaggle/working/",
 }
 
 CHECKPOINT_PATH_TEMPLATE = "checkpoint_epoch_{epoch}.pth"
