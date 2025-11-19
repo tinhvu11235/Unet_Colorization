@@ -116,7 +116,7 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
 
             loss_rec = criterion(fake_ab, ab)
             loss_kl = kl_loss(mu, logvar)
-            loss = loss_rec + beta_kl * loss_kl
+            loss = 100*loss_rec + beta_kl * loss_kl
 
             optimizer.zero_grad()
             loss.backward()
@@ -141,7 +141,7 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
 
                 r = criterion(fake_ab_v, ab_v)
                 k = kl_loss(mu_v, logvar_v)
-                t = r + beta_kl * k
+                t = 100*r + beta_kl * k
 
                 v_rec += r.item()
                 v_kl += k.item()
