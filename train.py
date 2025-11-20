@@ -106,7 +106,9 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
 
     for epoch in range(start_epoch, epochs):
         net_G.train()
-        total = 0; total_rec = 0; total_kl = 0
+        total = 0
+        total_rec = 0
+        total_kl = 0
 
         for data in train_dl:
             L = data['L'].to(DEVICE)
@@ -116,7 +118,7 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
 
             loss_rec = criterion(fake_ab, ab)
             loss_kl = kl_loss(mu, logvar)
-            loss = 100*loss_rec + beta_kl * loss_kl
+            loss = 100 * loss_rec + beta_kl * loss_kl
 
             optimizer.zero_grad()
             loss.backward()
@@ -131,7 +133,9 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
         avg_total = total / len(train_dl)
 
         net_G.eval()
-        v_total = 0; v_rec = 0; v_kl = 0
+        v_total = 0
+        v_rec = 0
+        v_kl = 0
         with torch.no_grad():
             for val in val_dl:
                 L_v = val['L'].to(DEVICE)
@@ -141,7 +145,7 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
 
                 r = criterion(fake_ab_v, ab_v)
                 k = kl_loss(mu_v, logvar_v)
-                t = 100*r + beta_kl * k
+                t = 100 * r + beta_kl * k
 
                 v_rec += r.item()
                 v_kl += k.item()
@@ -166,37 +170,35 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
             L_fix = data_fix['L'].to(DEVICE)
             ab_fix = data_fix['ab'].to(DEVICE)
             fake_fix, _, _ = net_G(L_fix)
-    
+
             L_fix_cpu = L_fix.detach().cpu()
             ab_fix_cpu = ab_fix.detach().cpu()
             fake_fix_cpu = fake_fix.detach().cpu()
-    
+
             caps_fix = [f"epoch{epoch+1}_fix_{i}" for i in range(L_fix_cpu.size(0))]
             wandb_fake_fix = log_image_wandb(L_fix_cpu, fake_fix_cpu, captions=caps_fix)
             wandb_real_fix = log_image_wandb(L_fix_cpu, ab_fix_cpu, captions=caps_fix)
-    
+
             data_rand = next(iter(val_dl))
             L_r = data_rand['L'].to(DEVICE)
             ab_r = data_rand['ab'].to(DEVICE)
             fake_rand, _, _ = net_G(L_r)
-    
+
             L_r_cpu = L_r.detach().cpu()
             ab_r_cpu = ab_r.detach().cpu()
             fake_rand_cpu = fake_rand.detach().cpu()
-    
+
             caps_rand = [f"epoch{epoch+1}_rand_{i}" for i in range(L_r_cpu.size(0))]
             wandb_fake_rand = log_image_wandb(L_r_cpu, fake_rand_cpu, num=5, captions=caps_rand)
             wandb_real_rand = log_image_wandb(L_r_cpu, ab_r_cpu, num=5, captions=caps_rand)
-    
-            wandb.log({
-                "images/fake_fix": wandb_fake_fix,
-                "images/real_fix": wandb_real_fix,
-                "images/fake_rand": wandb_fake_rand,
-                "images/real_rand": wandb_real_rand,
-            })
 
+        step = epoch + 1
         wandb.log({
-            "epoch": epoch + 1,
+            "images/fake_fix": wandb_fake_fix,
+            "images/real_fix": wandb_real_fix,
+            "images/fake_rand": wandb_fake_rand,
+            "images/real_rand": wandb_real_rand,
+            "epoch": step,
             "train_rec": avg_rec,
             "train_kl": avg_kl,
             "train_total": avg_total,
@@ -204,9 +206,9 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
             "val_kl": v_kl,
             "val_total": v_total,
             "lr": optimizer.param_groups[0]['lr'],
-        })
+        }, step=step)
 
-        print(epoch+1, avg_rec, avg_kl, avg_total, v_rec, v_kl, v_total)
+        print(epoch + 1, avg_rec, avg_kl, avg_total, v_rec, v_kl, v_total)
 
     wandb.finish()
 
