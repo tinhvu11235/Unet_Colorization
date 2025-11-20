@@ -67,7 +67,7 @@ def log_image_wandb(L, ab, num=5, captions=None):
         num = B
     wandb_images = []
     for i in range(num):
-        rgb = lab2rgb(L[i], ab[i])
+        rgb = lab_to_rgb(L[i], ab[i])
         caption = captions[i] if captions is not None else f"Image {i}"
         wandb_images.append(wandb.Image(rgb, caption=caption))
     return wandb_images
