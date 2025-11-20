@@ -36,7 +36,7 @@ def kl_loss(mu, logvar):
 def save_checkpoint_local(epoch, model, optimizer, scheduler, run_id, save_dir, best_val=None, is_best=False):
     ensure_dir(save_dir)
     payload = {
-        'epoch': epoch + 1,
+        'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
@@ -67,7 +67,7 @@ def log_image_wandb(L, ab, num=5, captions=None):
         num = B
     wandb_images = []
     for i in range(num):
-        rgb = lab_to_rgb(L[i], ab[i])
+        rgb = lab2rgb(L[i], ab[i])
         caption = captions[i] if captions is not None else f"Image {i}"
         wandb_images.append(wandb.Image(rgb, caption=caption))
     return wandb_images
@@ -104,6 +104,11 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
                    config={'lr': lr, 'epochs': epochs, 'beta_kl': beta_kl})
         run_id = wandb.run.id
 
+    fixed_batch = next(iter(val_dl))
+    L_fix_const = fixed_batch['L'].to(DEVICE)
+    ab_fix_const = fixed_batch['ab'].to(DEVICE)
+    val_iter = iter(val_dl)
+
     for epoch in range(start_epoch, epochs):
         net_G.train()
         total = 0
@@ -118,7 +123,7 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
 
             loss_rec = criterion(fake_ab, ab)
             loss_kl = kl_loss(mu, logvar)
-            loss = 100 * loss_rec + beta_kl * loss_kl
+            loss = 10 * loss_rec + beta_kl * loss_kl
 
             optimizer.zero_grad()
             loss.backward()
@@ -145,7 +150,7 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
 
                 r = criterion(fake_ab_v, ab_v)
                 k = kl_loss(mu_v, logvar_v)
-                t = 100 * r + beta_kl * k
+                t = 10 * r + beta_kl * k
 
                 v_rec += r.item()
                 v_kl += k.item()
@@ -160,26 +165,23 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
         is_best = v_total < best_val if save_best else False
         if is_best:
             best_val = v_total
-
-        if ((epoch + 1) % save_every == 0) or is_best:
-            save_checkpoint_local(epoch, net_G, optimizer, scheduler, run_id,
+        save_checkpoint_local(epoch, net_G, optimizer, scheduler, run_id,
                                   save_dir, best_val=best_val, is_best=is_best)
-
         with torch.no_grad():
-            data_fix = next(iter(val_dl))
-            L_fix = data_fix['L'].to(DEVICE)
-            ab_fix = data_fix['ab'].to(DEVICE)
-            fake_fix, _, _ = net_G(L_fix)
-
-            L_fix_cpu = L_fix.detach().cpu()
-            ab_fix_cpu = ab_fix.detach().cpu()
+            fake_fix, _, _ = net_G(L_fix_const)
+            L_fix_cpu = L_fix_const.detach().cpu()
+            ab_fix_cpu = ab_fix_const.detach().cpu()
             fake_fix_cpu = fake_fix.detach().cpu()
-
             caps_fix = [f"epoch{epoch+1}_fix_{i}" for i in range(L_fix_cpu.size(0))]
             wandb_fake_fix = log_image_wandb(L_fix_cpu, fake_fix_cpu, captions=caps_fix)
             wandb_real_fix = log_image_wandb(L_fix_cpu, ab_fix_cpu, captions=caps_fix)
 
-            data_rand = next(iter(val_dl))
+            try:
+                data_rand = next(val_iter)
+            except StopIteration:
+                val_iter = iter(val_dl)
+                data_rand = next(val_iter)
+
             L_r = data_rand['L'].to(DEVICE)
             ab_r = data_rand['ab'].to(DEVICE)
             fake_rand, _, _ = net_G(L_r)
@@ -187,12 +189,10 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
             L_r_cpu = L_r.detach().cpu()
             ab_r_cpu = ab_r.detach().cpu()
             fake_rand_cpu = fake_rand.detach().cpu()
-
             caps_rand = [f"epoch{epoch+1}_rand_{i}" for i in range(L_r_cpu.size(0))]
             wandb_fake_rand = log_image_wandb(L_r_cpu, fake_rand_cpu, num=5, captions=caps_rand)
             wandb_real_rand = log_image_wandb(L_r_cpu, ab_r_cpu, num=5, captions=caps_rand)
 
-        step = epoch + 1
         wandb.log({
             "images/fake_fix": wandb_fake_fix,
             "images/real_fix": wandb_real_fix,
@@ -206,9 +206,11 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
             "val_kl": v_kl,
             "val_total": v_total,
             "lr": optimizer.param_groups[0]['lr'],
-        }, step=step)
+        })
 
-        print(epoch + 1, avg_rec, avg_kl, avg_total, v_rec, v_kl, v_total)
+        print(f"Epoch {epoch + 1}/{epochs} | "
+              f"train_rec: {avg_rec:.6f}, train_kl: {avg_kl:.6f}, train_total: {avg_total:.6f} | "
+              f"val_rec: {v_rec:.6f}, val_kl: {v_kl:.6f}, val_total: {v_total:.6f}")
 
     wandb.finish()
 
@@ -225,6 +227,7 @@ def train_from_scratch(cfg):
         net_G, train_dl, val_dl,
         epochs=cfg["EPOCHS"], lr=cfg["LR"],
         checkpoint_path=None,
+        save_dir=cfg["CHECKPOINT_DIR"],
     )
 
 def continue_training(cfg, gdrive_id_or_url):
@@ -241,4 +244,5 @@ def continue_training(cfg, gdrive_id_or_url):
         net_G, train_dl, val_dl,
         epochs=cfg["EPOCHS"], lr=cfg["LR"],
         checkpoint_path=local_ckpt,
+        save_dir=cfg["CHECKPOINT_DIR"],
     )
