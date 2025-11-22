@@ -21,6 +21,12 @@ def lab_to_rgb(L, ab):
 
 def save_checkpoint_as_artifact(epoch, model, run_id, artifact_base_name="checkpoint"):
     checkpoint_file = f"{artifact_base_name}_epoch_{epoch}.pth"
+    net_G = model.net_G
+    net_D = model.net_D
+    if isinstance(net_G, nn.DataParallel):
+        net_G = net_G.module
+    if isinstance(net_D, nn.DataParallel):
+        net_D = net_D.module
     torch.save({
         'epoch': epoch + 1,
         'Unet_state_dict': model.net_G.state_dict(),
