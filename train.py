@@ -86,7 +86,7 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
     best_val = float("inf")
 
     if checkpoint_path and os.path.exists(checkpoint_path):
-        ckpt = torch.load(checkpoint_path, map_location=DEVICE)
+        ckpt = torch.load(checkpoint_path, map_location="cpu")
         net_G.load_state_dict(ckpt['model_state_dict'])
         if 'optimizer_state_dict' in ckpt:
             optimizer.load_state_dict(ckpt['optimizer_state_dict'])
