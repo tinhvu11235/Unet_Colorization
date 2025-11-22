@@ -264,10 +264,6 @@ class GAN(nn.Module):
             use_ctx_attn=use_ctx_attn,
             film_on_skip=film_on_skip
         ).to(self.device)
-        if torch.cuda.device_count() > 1:
-            print("Using", torch.cuda.device_count(), "GPUs")
-            self.net_G = nn.DataParallel(self.net_G)
-            self.net_D = nn.DataParallel(self.net_D)
         self.net_G.apply(init_weights)
         self.net_D = PatchDiscriminator(input_c=3).init_weights().to(self.device)
         self.GANcriterion = GANLoss(gan_mode='vanilla').to(self.device)
@@ -275,7 +271,10 @@ class GAN(nn.Module):
         self.opt_G = optim.Adam(self.net_G.parameters(), lr=lr_G, betas=(beta1, beta2))
         self.opt_D = optim.Adam(self.net_D.parameters(), lr=lr_D, betas=(beta1, beta2))
         self.scheduler_G = ReduceLROnPlateau(self.opt_G, mode='min', factor=0.95, patience=5, verbose=True)
-
+        if torch.cuda.device_count() > 1:
+            print("Using", torch.cuda.device_count(), "GPUs")
+            self.net_G = nn.DataParallel(self.net_G)
+            self.net_D = nn.DataParallel(self.net_D)
     def set_requires_grad(self, model, requires_grad=True):
         for p in model.parameters():
             p.requires_grad = requires_grad
