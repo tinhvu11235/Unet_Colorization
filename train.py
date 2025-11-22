@@ -3,6 +3,7 @@ import requests
 import torch
 import numpy as np
 from tqdm.auto import tqdm
+import torch.nn as nn
 from data_loader import create_dataloaders
 import wandb
 import os
