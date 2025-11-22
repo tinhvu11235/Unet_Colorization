@@ -77,15 +77,22 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
             if 'momentum_buffer' in state:
                 state['momentum_buffer'].zero_()
         run_id = checkpoint['run_id']
+
     if run_id:
         wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], id=run_id, resume="must")
     else:
         wandb.init(project=cfg["WANDB_PROJECT"], name=cfg["WANDB_RUN_NAME"], config=cfg)
+
     for epoch in range(start_epoch, epochs):
-        running_loss_G = running_loss_D = 0.0
-        running_loss_G_GAN = running_loss_G_L1 = 0.0
-        running_loss_D_fake = running_loss_D_real = 0.0
+        running_loss_G = 0.0
+        running_loss_D = 0.0
+        running_loss_G_GAN = 0.0
+        running_loss_G_L1 = 0.0
+        running_loss_G_KL = 0.0
+        running_loss_D_fake = 0.0
+        running_loss_D_real = 0.0
         step = 0
+
         if epoch == 0:
             for warmup_epoch in range(warmup_epochs):
                 step_warmup = 0
@@ -110,21 +117,27 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
                             val_fake = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5, captions=caps_val)
                             val_real = log_image_wandb(GAN_model.L, GAN_model.ab, num=5, captions=caps_val)
                         wandb.log({
-                            "fix_fake_images": fake_imgs,
-                            "fix_real_images": real_imgs,
-                            "random_fake_images": val_fake,
-                            "random_real_images": val_real,
+                            "warmup_fix_fake_images": fake_imgs,
+                            "warmup_fix_real_images": real_imgs,
+                            "warmup_random_fake_images": val_fake,
+                            "warmup_random_real_images": val_real,
+                            "warmup_loss_L1": GAN_model.loss_G_L1.item(),
+                            "warmup_loss_KL": GAN_model.loss_G_KL.item()
                         })
+
         for data in tqdm(train_dl, desc=f"Training Epoch {epoch+1}"):
             GAN_model.setup_input(data)
             GAN_model.optimize()
+
             running_loss_G += GAN_model.loss_G.item()
             running_loss_D += GAN_model.loss_D.item()
             running_loss_G_GAN += GAN_model.loss_G_GAN.item()
             running_loss_G_L1 += GAN_model.loss_G_L1.item()
+            running_loss_G_KL += GAN_model.loss_G_KL.item()
             running_loss_D_fake += GAN_model.loss_D_fake.item()
             running_loss_D_real += GAN_model.loss_D_real.item()
             step += 1
+
             if step % log_interval == 0:
                 with torch.no_grad():
                     bs = cfg["BATCH_SIZE"]
@@ -142,20 +155,31 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
                     val_fake = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5, captions=caps_val)
                     val_real = log_image_wandb(GAN_model.L, GAN_model.ab, num=5, captions=caps_val)
                 wandb.log({
-                    "fix_fake_images": fake_imgs,
-                    "fix_real_images": real_imgs,
-                    "random_fake_images": val_fake,
-                    "random_real_images": val_real,
+                    "step_loss_G": GAN_model.loss_G.item(),
+                    "step_loss_D": GAN_model.loss_D.item(),
+                    "step_loss_G_GAN": GAN_model.loss_G_GAN.item(),
+                    "step_loss_G_L1": GAN_model.loss_G_L1.item(),
+                    "step_loss_G_KL": GAN_model.loss_G_KL.item(),
+                    "step_loss_D_fake": GAN_model.loss_D_fake.item(),
+                    "step_loss_D_real": GAN_model.loss_D_real.item(),
+                    "step_fix_fake_images": fake_imgs,
+                    "step_fix_real_images": real_imgs,
+                    "step_random_fake_images": val_fake,
+                    "step_random_real_images": val_real,
                 }, commit=False)
+
         num_batches = len(train_dl)
         average_loss_G = running_loss_G / num_batches
         average_loss_D = running_loss_D / num_batches
         average_loss_G_GAN = running_loss_G_GAN / num_batches
         average_loss_G_L1 = running_loss_G_L1 / num_batches
+        average_loss_G_KL = running_loss_G_KL / num_batches
         average_loss_D_fake = running_loss_D_fake / num_batches
         average_loss_D_real = running_loss_D_real / num_batches
+
         GAN_model.scheduler_G.step(average_loss_G)
         val_L1 = evaluate_L1_on_val(GAN_model, val_dl)
+
         with torch.no_grad():
             data_fix = next(iter(val_dl))
             GAN_model.setup_input(data_fix)
@@ -168,11 +192,13 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
             GAN_model.forward()
             val_fake_imgs = log_image_wandb(GAN_model.L, GAN_model.fake_color, num=5)
             val_real_imgs = log_image_wandb(GAN_model.L, GAN_model.ab, num=5)
+
         wandb.log({
             "epoch_train_loss_G": average_loss_G,
             "epoch_train_loss_D": average_loss_D,
             "epoch_train_loss_G_GAN": average_loss_G_GAN,
             "epoch_train_loss_G_L1": average_loss_G_L1,
+            "epoch_train_loss_G_KL": average_loss_G_KL,
             "epoch_val_loss_G_L1": val_L1,
             "epoch_train_loss_D_fake": average_loss_D_fake,
             "epoch_train_loss_D_real": average_loss_D_real,
@@ -182,7 +208,12 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
             "end_val_fake_images": val_fake_imgs,
             "end_val_real_images": val_real_imgs,
         })
-        print(f"Epoch {epoch+1}/{epochs} — train L1: {average_loss_G_L1:.4f}, val L1: {val_L1:.4f}")
+
+        print(f"Epoch {epoch+1}/{epochs} — "
+              f"train L1: {average_loss_G_L1:.4f}, "
+              f"KL: {average_loss_G_KL:.4f}, "
+              f"val L1: {val_L1:.4f}")
+
         save_checkpoint_as_artifact(epoch, GAN_model, wandb.run.id, artifact_base_name="checkpoint")
 
 def download_model(url, output_path):
