@@ -268,6 +268,8 @@ class GAN(nn.Module):
             print("Using", torch.cuda.device_count(), "GPUs")
             net_G = nn.DataParallel(net_G)
             net_D = nn.DataParallel(net_D)
+        self.net_G = net_G
+        self.net_D = net_D
         self.net_G.apply(init_weights)
         self.net_D = PatchDiscriminator(input_c=3).init_weights().to(self.device)
         self.GANcriterion = GANLoss(gan_mode='vanilla').to(self.device)
