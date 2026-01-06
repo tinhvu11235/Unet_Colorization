@@ -1,20 +1,19 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from diffusers.models.embeddings import get_timestep_embedding
 
-# ======================
-# 1. Conv block & Encoder
-# ======================
+
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.Conv2d(in_channels, out_channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, x):
@@ -28,50 +27,23 @@ class Encoder(nn.Module):
         self.conv = ConvBlock(in_channels, out_channels)
 
     def forward(self, x):
-        x = self.pool(x)
-        x = self.conv(x)
-        return x
+        return self.conv(self.pool(x))
 
 
-# ======================
-# 2. Global context VAE
-# ======================
-class GlobalContextVAE(nn.Module):
-    def __init__(self, in_ch, hidden=512, z_dim=256, use_attn=False):
+class GlobalContext(nn.Module):
+    def __init__(self, in_ch, hidden=256, z_dim=256):
         super().__init__()
-        self.use_attn = use_attn
-        if use_attn:
-            self.query = nn.Parameter(torch.randn(1, in_ch, 1, 1))
-
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.mlp = nn.Sequential(
             nn.Conv2d(in_ch, hidden, 1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(hidden, 2 * z_dim, 1)
+            nn.SiLU(),
+            nn.Conv2d(hidden, z_dim, 1),
         )
 
     def forward(self, f):
-        B, C, H, W = f.shape
-
-        if self.use_attn:
-            attn = torch.sum(f * self.query, dim=1, keepdim=True)
-            attn = torch.softmax(attn.flatten(1), dim=1).view(B, 1, H, W)
-            f = f * attn
-
-        h = self.pool(f)
-        h = self.mlp(h).flatten(1)
-        mu, logvar = torch.chunk(h, 2, dim=1)
-
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        z = mu + eps * std
-
-        return z, mu, logvar
+        return self.mlp(self.pool(f)).flatten(1)
 
 
-# ======================
-# 3. FiLM blocks
-# ======================
 class FiLM(nn.Module):
     def __init__(self, feat_ch, z_dim):
         super().__init__()
@@ -91,18 +63,17 @@ class FiLM(nn.Module):
 class DecoderFiLM(nn.Module):
     def __init__(self, in_channels, out_channels, z_dim, film_on_skip=False, skip_channels=None):
         super().__init__()
-        self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
         self.conv = ConvBlock(in_channels, out_channels)
         self.film = FiLM(out_channels, z_dim)
         self.film_on_skip = film_on_skip
-        if self.film_on_skip:
-            assert skip_channels is not None, "Need skip_channels when film_on_skip=True"
+        if film_on_skip:
             self.film_skip = FiLM(skip_channels, z_dim)
 
     def forward(self, prev_output, skip_output, z):
         x = self.up(prev_output)
-        if x.size(-1) != skip_output.size(-1) or x.size(-2) != skip_output.size(-2):
-            x = F.interpolate(x, size=skip_output.shape[-2:], mode='bilinear', align_corners=False)
+        if x.shape[-2:] != skip_output.shape[-2:]:
+            x = F.interpolate(x, size=skip_output.shape[-2:], mode="bilinear", align_corners=False)
         if self.film_on_skip:
             skip_output = self.film_skip(skip_output, z)
         x = torch.cat([x, skip_output], dim=1)
@@ -111,110 +82,70 @@ class DecoderFiLM(nn.Module):
         return x
 
 
-# ======================
-# 4. UNet + FiLM + VAE
-# ======================
-class UNetGeneratorFiLMVAE(nn.Module):
-    def __init__(self, z_dim=256, use_ctx_attn=False, film_on_skip=False):
+class UNetDenoiserFiLM(nn.Module):
+    def __init__(self, z_dim=256, time_emb_dim=256, film_on_skip=False):
         super().__init__()
-        self.input_layer = ConvBlock(1, 64)
+
+        self.time_mlp = nn.Sequential(
+            nn.Linear(time_emb_dim, z_dim),
+            nn.SiLU(),
+            nn.Linear(z_dim, z_dim),
+        )
+
+        self.L_input = ConvBlock(1, 64)
+        self.L_enc1 = Encoder(64, 128)
+        self.L_enc2 = Encoder(128, 256)
+        self.L_enc3 = Encoder(256, 512)
+        self.L_enc4 = Encoder(512, 1024)
+        self.global_ctx = GlobalContext(1024, hidden=256, z_dim=z_dim)
+
+        self.fuse = nn.Sequential(
+            nn.Linear(z_dim * 2, z_dim),
+            nn.SiLU(),
+            nn.Linear(z_dim, z_dim),
+        )
+
+        self.input_layer = ConvBlock(3, 64)
         self.enc1 = Encoder(64, 128)
         self.enc2 = Encoder(128, 256)
         self.enc3 = Encoder(256, 512)
         self.enc4 = Encoder(512, 1024)
 
-        self.global_ctx = GlobalContextVAE(
-            in_ch=1024,
-            hidden=512,
-            z_dim=z_dim,
-            use_attn=use_ctx_attn
-        )
-
-        self.dec1 = DecoderFiLM(
-            in_channels=1024 + 512,
-            out_channels=512,
-            z_dim=z_dim,
-            film_on_skip=film_on_skip,
-            skip_channels=512
-        )
-        self.dec2 = DecoderFiLM(
-            in_channels=512 + 256,
-            out_channels=256,
-            z_dim=z_dim,
-            film_on_skip=film_on_skip,
-            skip_channels=256
-        )
-        self.dec3 = DecoderFiLM(
-            in_channels=256 + 128,
-            out_channels=128,
-            z_dim=z_dim,
-            film_on_skip=film_on_skip,
-            skip_channels=128
-        )
-        self.dec4 = DecoderFiLM(
-            in_channels=128 + 64,
-            out_channels=64,
-            z_dim=z_dim,
-            film_on_skip=film_on_skip,
-            skip_channels=64
-        )
+        self.dec1 = DecoderFiLM(1024 + 512, 512, z_dim, film_on_skip, 512)
+        self.dec2 = DecoderFiLM(512 + 256, 256, z_dim, film_on_skip, 256)
+        self.dec3 = DecoderFiLM(256 + 128, 128, z_dim, film_on_skip, 128)
+        self.dec4 = DecoderFiLM(128 + 64, 64, z_dim, film_on_skip, 64)
 
         self.output_layer = nn.Conv2d(64, 2, kernel_size=1)
 
-    def forward(self, x):
+    @torch.no_grad()
+    def compute_z_ctx(self, L):
+        l1 = self.L_input(L)
+        l2 = self.L_enc1(l1)
+        l3 = self.L_enc2(l2)
+        l4 = self.L_enc3(l3)
+        l5 = self.L_enc4(l4)
+        return self.global_ctx(l5)
+
+    def forward(self, ab_t, L, t, z_ctx=None):
+        t_emb = get_timestep_embedding(t, self.time_mlp[0].in_features)
+        z_t = self.time_mlp(t_emb)
+
+        if z_ctx is None:
+            z_ctx = self.compute_z_ctx(L)
+
+        z = self.fuse(torch.cat([z_t, z_ctx], dim=1))
+
+        x = torch.cat([ab_t, L], dim=1)
         x1 = self.input_layer(x)
         x2 = self.enc1(x1)
         x3 = self.enc2(x2)
         x4 = self.enc3(x3)
         x5 = self.enc4(x4)
 
-        z, mu, logvar = self.global_ctx(x5)
-
         d1 = self.dec1(x5, x4, z)
         d2 = self.dec2(d1, x3, z)
         d3 = self.dec3(d2, x2, z)
         d4 = self.dec4(d3, x1, z)
 
-        out = self.output_layer(d4)
-        out = torch.tanh(out)
-
-        return out, mu, logvar
-
-
-# ======================
-# 5. Init & build model
-# ======================
-def init_weights(m):
-    if isinstance(m, (nn.Conv2d, nn.Linear)):
-        nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-        if getattr(m, "bias", None) is not None:
-            nn.init.zeros_(m.bias)
-
-
-def build_model(z_dim=256, use_ctx_attn=False, film_on_skip=False, init=True):
-    model = UNetGeneratorFiLMVAE(
-        z_dim=z_dim,
-        use_ctx_attn=use_ctx_attn,
-        film_on_skip=film_on_skip
-    )
-    if init:
-        model.apply(init_weights)
-    return model
-
-
-@torch.no_grad()
-def load_trained_model(model_path='model_vae.pth',
-                           z_dim=256, use_ctx_attn=False, film_on_skip=False,
-                           map_location='cpu'):
-    model = build_model(
-        z_dim=z_dim,
-        use_ctx_attn=use_ctx_attn,
-        film_on_skip=film_on_skip,
-        init=True
-    )
-    ckpt = torch.load(model_path, map_location=torch.device(map_location))
-    missing, unexpected = model.load_state_dict(ckpt.get('model_state_dict', ckpt), strict=False)
-    print("[load] missing keys:", missing)
-    print("[load] unexpected keys:", unexpected)
-    model.eval()
-    return model
+        return self.output_layer(d4)
