@@ -149,3 +149,37 @@ class UNetDenoiserFiLM(nn.Module):
         d4 = self.dec4(d3, x1, z)
 
         return self.output_layer(d4)
+def _init_weights(m):
+    if isinstance(m, nn.Conv2d):
+        nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.BatchNorm2d):
+        nn.init.ones_(m.weight)
+        nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.Linear):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+
+
+def build_model(
+    z_dim=256,
+    time_emb_dim=256,
+    film_on_skip=False,
+    init_weights=True,
+):
+    model = UNetDenoiserFiLM(
+        z_dim=z_dim,
+        time_emb_dim=time_emb_dim,
+        film_on_skip=film_on_skip,
+    )
+
+    if init_weights:
+        model.apply(_init_weights)
+        nn.init.zeros_(model.output_layer.weight)
+        if model.output_layer.bias is not None:
+            nn.init.zeros_(model.output_layer.bias)
+
+    return model
+
