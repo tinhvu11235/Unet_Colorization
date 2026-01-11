@@ -1,13 +1,13 @@
 import os
 import torch
 import torch.optim as optim
-import torch.nn as nn
-from tqdm.auto import tqdm
+import torch.nn.functional as F
 import wandb
 import numpy as np
 from skimage.color import lab2rgb
-import gdown
 from datetime import datetime
+from diffusers.schedulers import DDPMScheduler
+
 from config import DEVICE
 from model import build_model
 from data_loader import create_dataloaders
@@ -18,8 +18,8 @@ warnings.filterwarnings("ignore", category=UserWarning)
 config = {}
 
 def lab_to_rgb(L, ab):
-    L = (L + 1.) * 50.
-    ab = ab * 110.
+    L = (L + 1.0) * 50.0
+    ab = ab * 110.0
     Lab = np.concatenate([L, ab], axis=0).transpose(1, 2, 0)
     return lab2rgb(Lab)
 
@@ -27,59 +27,73 @@ def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
 
 def get_ckpt_path(save_dir, epoch, prefix="checkpoint"):
-    fname = f"{prefix}_epoch_{epoch}.pth"
-    return os.path.join(save_dir, fname)
-
-def kl_loss(mu, logvar):
-    return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
+    return os.path.join(save_dir, f"{prefix}_epoch_{epoch}.pth")
 
 def save_checkpoint_local(epoch, model, optimizer, scheduler, run_id, save_dir, best_val=None, is_best=False):
     ensure_dir(save_dir)
     payload = {
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
-        'run_id': run_id,
-        'best_val': best_val,
-        'timestamp': datetime.now().isoformat()
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "run_id": run_id,
+        "best_val": best_val,
+        "timestamp": datetime.now().isoformat(),
     }
     ckpt_path = get_ckpt_path(save_dir, epoch)
     torch.save(payload, ckpt_path)
     if is_best:
-        best_path = os.path.join(save_dir, "best.pth")
-        torch.save(payload, best_path)
+        torch.save(payload, os.path.join(save_dir, "best.pth"))
     return ckpt_path
 
-def download_ckpt_from_gdrive(gdrive_id_or_url, dst_dir):
-    ensure_dir(dst_dir)
-    outfile = os.path.join(dst_dir, "resume_from_drive.pth")
-    gdown.download(url=gdrive_id_or_url, output=outfile, quiet=False, fuzzy=True)
-    if not os.path.exists(outfile):
-        raise ValueError("Cannot download checkpoint from Google Drive.")
-    return outfile
-
 def log_image_wandb(L, ab, num=5, captions=None):
-    L = L.cpu().detach().numpy()
-    ab = ab.cpu().detach().numpy()
-    B = L.shape[0]
-    if B < num:
-        num = B
-    wandb_images = []
-    for i in range(num):
+    L = L.detach().cpu().numpy()
+    ab = ab.detach().cpu().numpy()
+    B = min(L.shape[0], num)
+    images = []
+    for i in range(B):
         rgb = lab_to_rgb(L[i], ab[i])
-        caption = captions[i] if captions is not None else f"Image {i}"
-        wandb_images.append(wandb.Image(rgb, caption=caption))
-    return wandb_images
+        cap = captions[i] if captions is not None else f"img_{i}"
+        images.append(wandb.Image(rgb, caption=cap))
+    return images
 
-def train_model(net_G, train_dl, val_dl, epochs, lr,
-                beta_kl=1e-5,
-                checkpoint_path=None, save_dir="/kaggle/working/checkpoints",
-                save_every=1, save_best=True):
+@torch.no_grad()
+def sample_colorization(model, L, scheduler, num_steps):
+    model.eval()
+    B, _, H, W = L.shape
+    ab = torch.randn(B, 2, H, W, device=L.device)
+    scheduler.set_timesteps(num_steps)
+    for t in scheduler.timesteps:
+        t_batch = t.expand(B)
+        pred_noise = model(ab, L, t_batch)
+        ab = scheduler.step(pred_noise, t, ab).prev_sample
+    return ab
+
+def train_model(
+    net_G,
+    train_dl,
+    val_dl,
+    epochs,
+    lr,
+    checkpoint_path=None,
+    save_dir="/kaggle/working/checkpoints",
+    inference_steps=50,
+):
 
     optimizer = optim.Adam(net_G.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.95, patience=5)
-    criterion = nn.L1Loss()
+    lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.95, patience=5
+    )
+
+    train_noise_scheduler = DDPMScheduler(
+        num_train_timesteps=1000,
+        beta_schedule="squaredcos_cap_v2",
+    )
+
+    infer_noise_scheduler = DDPMScheduler(
+        num_train_timesteps=1000,
+        beta_schedule="squaredcos_cap_v2",
+    )
 
     start_epoch = 0
     run_id = None
@@ -87,94 +101,104 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
 
     if checkpoint_path and os.path.exists(checkpoint_path):
         ckpt = torch.load(checkpoint_path, map_location="cpu")
-        net_G.load_state_dict(ckpt['model_state_dict'])
-        if 'optimizer_state_dict' in ckpt:
-            optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        if 'scheduler_state_dict' in ckpt:
-            scheduler.load_state_dict(ckpt['scheduler_state_dict'])
-        start_epoch = ckpt.get('epoch', 0)
-        run_id = ckpt.get('run_id', None)
-        best_val = ckpt.get('best_val', best_val)
+        net_G.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        lr_scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        start_epoch = ckpt.get("epoch", 0)
+        run_id = ckpt.get("run_id", None)
+        best_val = ckpt.get("best_val", best_val)
 
     if run_id:
-        wandb.init(project=config["WANDB_PROJECT"], name=config["WANDB_RUN_NAME"],
-                   id=run_id, resume="must")
+        wandb.init(
+            project=config["WANDB_PROJECT"],
+            name=config["WANDB_RUN_NAME"],
+            id=run_id,
+            resume="must",
+        )
     else:
-        wandb.init(project=config["WANDB_PROJECT"], name=config["WANDB_RUN_NAME"],
-                   config={'lr': lr, 'epochs': epochs, 'beta_kl': beta_kl})
+        wandb.init(
+            project=config["WANDB_PROJECT"],
+            name=config["WANDB_RUN_NAME"],
+            config={"lr": lr, "epochs": epochs},
+        )
         run_id = wandb.run.id
 
     fixed_batch = next(iter(val_dl))
-    L_fix_const = fixed_batch['L'].to(DEVICE)
-    ab_fix_const = fixed_batch['ab'].to(DEVICE)
+    L_fix_all = fixed_batch["L"].to(DEVICE)
+    ab_fix_all = fixed_batch["ab"].to(DEVICE)
     val_iter = iter(val_dl)
 
     for epoch in range(start_epoch, epochs):
         net_G.train()
-        total = 0
-        total_rec = 0
-        total_kl = 0
+        train_loss = 0.0
 
         for data in train_dl:
-            L = data['L'].to(DEVICE)
-            ab = data['ab'].to(DEVICE)
+            L = data["L"].to(DEVICE)
+            ab = data["ab"].to(DEVICE)
 
-            fake_ab, mu, logvar = net_G(L)
+            B = ab.size(0)
+            t = torch.randint(
+                0, train_noise_scheduler.num_train_timesteps, (B,), device=DEVICE
+            ).long()
 
-            loss_rec = criterion(fake_ab, ab)
-            loss_kl = kl_loss(mu, logvar)
-            loss = 10 * loss_rec + beta_kl * loss_kl
+            noise = torch.randn_like(ab)
+            ab_t = train_noise_scheduler.add_noise(ab, noise, t)
+
+            pred_noise = net_G(ab_t, L, t)
+            loss = F.mse_loss(pred_noise, noise)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            total_rec += loss_rec.item()
-            total_kl += loss_kl.item()
-            total += loss.item()
+            train_loss += loss.item()
 
-        avg_rec = total_rec / len(train_dl)
-        avg_kl = total_kl / len(train_dl)
-        avg_total = total / len(train_dl)
+        train_loss /= len(train_dl)
 
         net_G.eval()
-        v_total = 0
-        v_rec = 0
-        v_kl = 0
+        val_loss = 0.0
         with torch.no_grad():
             for val in val_dl:
-                L_v = val['L'].to(DEVICE)
-                ab_v = val['ab'].to(DEVICE)
+                L_v = val["L"].to(DEVICE)
+                ab_v = val["ab"].to(DEVICE)
 
-                fake_ab_v, mu_v, logvar_v = net_G(L_v)
+                B = ab_v.size(0)
+                t = torch.randint(
+                    0, train_noise_scheduler.num_train_timesteps, (B,), device=DEVICE
+                ).long()
 
-                r = criterion(fake_ab_v, ab_v)
-                k = kl_loss(mu_v, logvar_v)
-                t = 10 * r + beta_kl * k
+                noise = torch.randn_like(ab_v)
+                ab_t = train_noise_scheduler.add_noise(ab_v, noise, t)
 
-                v_rec += r.item()
-                v_kl += k.item()
-                v_total += t.item()
+                pred_noise = net_G(ab_t, L_v, t)
+                val_loss += F.mse_loss(pred_noise, noise).item()
 
-        v_rec /= len(val_dl)
-        v_kl /= len(val_dl)
-        v_total /= len(val_dl)
+        val_loss /= len(val_dl)
+        lr_scheduler.step(val_loss)
 
-        scheduler.step(v_total)
-
-        is_best = v_total < best_val if save_best else False
+        is_best = val_loss < best_val
         if is_best:
-            best_val = v_total
-        save_checkpoint_local(epoch, net_G, optimizer, scheduler, run_id,
-                                  save_dir, best_val=best_val, is_best=is_best)
+            best_val = val_loss
+
+        save_checkpoint_local(
+            epoch,
+            net_G,
+            optimizer,
+            lr_scheduler,
+            run_id,
+            save_dir,
+            best_val=best_val,
+            is_best=is_best,
+        )
+
         with torch.no_grad():
-            fake_fix, _, _ = net_G(L_fix_const)
-            L_fix_cpu = L_fix_const.detach().cpu()
-            ab_fix_cpu = ab_fix_const.detach().cpu()
-            fake_fix_cpu = fake_fix.detach().cpu()
-            caps_fix = [f"epoch{epoch+1}_fix_{i}" for i in range(L_fix_cpu.size(0))]
-            wandb_fake_fix = log_image_wandb(L_fix_cpu, fake_fix_cpu, captions=caps_fix)
-            wandb_real_fix = log_image_wandb(L_fix_cpu, ab_fix_cpu, captions=caps_fix)
+            n_vis = min(5, L_fix_all.size(0))
+            L_fix = L_fix_all[:n_vis]
+            ab_fix = ab_fix_all[:n_vis]
+
+            fake_fix = sample_colorization(
+                net_G, L_fix, infer_noise_scheduler, inference_steps
+            )
 
             try:
                 data_rand = next(val_iter)
@@ -182,67 +206,83 @@ def train_model(net_G, train_dl, val_dl, epochs, lr,
                 val_iter = iter(val_dl)
                 data_rand = next(val_iter)
 
-            L_r = data_rand['L'].to(DEVICE)
-            ab_r = data_rand['ab'].to(DEVICE)
-            fake_rand, _, _ = net_G(L_r)
+            L_r_all = data_rand["L"].to(DEVICE)
+            ab_r_all = data_rand["ab"].to(DEVICE)
+            n_vis_r = min(5, L_r_all.size(0))
+            L_r = L_r_all[:n_vis_r]
+            ab_r = ab_r_all[:n_vis_r]
 
-            L_r_cpu = L_r.detach().cpu()
-            ab_r_cpu = ab_r.detach().cpu()
-            fake_rand_cpu = fake_rand.detach().cpu()
-            caps_rand = [f"epoch{epoch+1}_rand_{i}" for i in range(L_r_cpu.size(0))]
-            wandb_fake_rand = log_image_wandb(L_r_cpu, fake_rand_cpu, num=5, captions=caps_rand)
-            wandb_real_rand = log_image_wandb(L_r_cpu, ab_r_cpu, num=5, captions=caps_rand)
+            fake_rand = sample_colorization(
+                net_G, L_r, infer_noise_scheduler, inference_steps
+            )
+
+        net_G.train()
 
         wandb.log({
-            "images/fake_fix": wandb_fake_fix,
-            "images/real_fix": wandb_real_fix,
-            "images/fake_rand": wandb_fake_rand,
-            "images/real_rand": wandb_real_rand,
-            "epoch": epoch +1,
-            "train_rec": avg_rec,
-            "train_kl": avg_kl,
-            "train_total": avg_total,
-            "val_rec": v_rec,
-            "val_kl": v_kl,
-            "val_total": v_total,
-            "lr": optimizer.param_groups[0]['lr'],
+            "epoch": epoch + 1,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "lr": optimizer.param_groups[0]["lr"],
+            "images/fake_fix": log_image_wandb(L_fix, fake_fix),
+            "images/real_fix": log_image_wandb(L_fix, ab_fix),
+            "images/fake_rand": log_image_wandb(L_r, fake_rand),
+            "images/real_rand": log_image_wandb(L_r, ab_r),
         })
 
-        print(f"Epoch {epoch + 1}/{epochs} | "
-              f"train_rec: {avg_rec:.6f}, train_kl: {avg_kl:.6f}, train_total: {avg_total:.6f} | "
-              f"val_rec: {v_rec:.6f}, val_kl: {v_kl:.6f}, val_total: {v_total:.6f}")
+        print(
+            f"Epoch {epoch+1}/{epochs} | "
+            f"train_loss: {train_loss:.6f} | val_loss: {val_loss:.6f}"
+        )
 
     wandb.finish()
 
 def train_from_scratch(cfg):
     global config
     config = cfg
+
     train_dl, val_dl = create_dataloaders(
-        cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"],
-        cfg["BATCH_SIZE"], cfg["NUM_WORKERS"],
-        cfg["TRAIN_SIZE"], cfg["VAL_SIZE"]
-    )
-    net_G = build_model().to(DEVICE)
-    train_model(
-        net_G, train_dl, val_dl,
-        epochs=cfg["EPOCHS"], lr=cfg["LR"],
-        checkpoint_path=None,
-        save_dir=cfg["CHECKPOINT_DIR"],
+        cfg["TRAIN_DATASET_PATH"],
+        cfg["VAL_DATASET_PATH"],
+        cfg["BATCH_SIZE"],
+        cfg["NUM_WORKERS"],
+        cfg["TRAIN_SIZE"],
+        cfg["VAL_SIZE"],
     )
 
-def continue_training(cfg, gdrive_id_or_url):
+    net_G = build_model().to(DEVICE)
+
+    train_model(
+        net_G,
+        train_dl,
+        val_dl,
+        epochs=cfg["EPOCHS"],
+        lr=cfg["LR"],
+        save_dir=cfg["CHECKPOINT_DIR"],
+        inference_steps=cfg.get("INFERENCE_STEPS", 50),
+    )
+
+def continue_training(cfg, checkpoint_path):
     global config
     config = cfg
-    local_ckpt = download_ckpt_from_gdrive(gdrive_id_or_url, cfg["CHECKPOINT_DIR"])
+
     train_dl, val_dl = create_dataloaders(
-        cfg["TRAIN_DATASET_PATH"], cfg["VAL_DATASET_PATH"],
-        cfg["BATCH_SIZE"], cfg["NUM_WORKERS"],
-        cfg["TRAIN_SIZE"], cfg["VAL_SIZE"]
+        cfg["TRAIN_DATASET_PATH"],
+        cfg["VAL_DATASET_PATH"],
+        cfg["BATCH_SIZE"],
+        cfg["NUM_WORKERS"],
+        cfg["TRAIN_SIZE"],
+        cfg["VAL_SIZE"],
     )
+
     net_G = build_model().to(DEVICE)
+
     train_model(
-        net_G, train_dl, val_dl,
-        epochs=cfg["EPOCHS"], lr=cfg["LR"],
-        checkpoint_path=local_ckpt,
+        net_G,
+        train_dl,
+        val_dl,
+        epochs=cfg["EPOCHS"],
+        lr=cfg["LR"],
+        checkpoint_path=checkpoint_path,
         save_dir=cfg["CHECKPOINT_DIR"],
+        inference_steps=cfg.get("INFERENCE_STEPS", 50),
     )
