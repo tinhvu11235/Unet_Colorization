@@ -5,7 +5,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 TRAIN_FROM_SCRATCH = {
     "TRAIN_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/train2017/train2017",
     "VAL_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/val2017/val2017",
-    "BATCH_SIZE": 32,
+    "BATCH_SIZE": 16,
     "EPOCHS": 70,
     "LR": 4e-4,
     "NUM_WORKERS": 4,
@@ -19,7 +19,7 @@ TRAIN_FROM_SCRATCH = {
 CONTINUE_TRAINING = {
     "TRAIN_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/train2017/train2017",
     "VAL_DATASET_PATH": "/kaggle/input/coco-stuff-image-only/val2017/val2017",
-    "BATCH_SIZE": 32,
+    "BATCH_SIZE": 16,
     "EPOCHS": 70,
     "LR": 4e-4,
     "NUM_WORKERS": 4,
