@@ -118,7 +118,6 @@ class UNetDenoiserFiLM(nn.Module):
 
         self.output_layer = nn.Conv2d(64, 2, kernel_size=1)
 
-    @torch.no_grad()
     def compute_z_ctx(self, L):
         l1 = self.L_input(L)
         l2 = self.L_enc1(l1)
