@@ -217,7 +217,7 @@ def train_model(
     L_fix_all = fixed_batch["L"].to(DEVICE)
     ab_fix_all = fixed_batch["ab"].to(DEVICE)
     val_iter = iter(val_dl)
-
+    check = True
     for epoch in range(start_epoch, epochs):
         net_G.train()
         train_loss = 0.0
@@ -237,10 +237,15 @@ def train_model(
 
             pred_noise = net_G(ab_t, L, t)
             loss = F.mse_loss(pred_noise, noise)
-
+            if epoch == 0 and check == True: 
+                baseline = F.mse_loss(torch.zeros_like(noise), noise).item()
+                print("noise mean/std:", noise.mean().item(), noise.std().item())
+                print("baseline mse (pred=0):", baseline)
+                print("current loss:", loss.item())
+                check = False
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            optimizer.step()
+            optimizer.()
 
             train_loss += loss.item()
             pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
