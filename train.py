@@ -245,7 +245,7 @@ def train_model(
                 check = False
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            optimizer.()
+            optimizer.step()
 
             train_loss += loss.item()
             pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
