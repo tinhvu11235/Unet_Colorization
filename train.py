@@ -1,6 +1,5 @@
 import os
 import re
-import tempfile
 import urllib.parse
 import urllib.request
 
@@ -134,11 +133,22 @@ def log_image_wandb(L, ab, num=5, captions=None):
     return images
 
 
+def stat_ab(name: str, ab: torch.Tensor):
+    m = ab.mean(dim=[0, 2, 3]).detach().cpu().numpy()
+    s = ab.std(dim=[0, 2, 3]).detach().cpu().numpy()
+    mx = ab.abs().max().item()
+    print(f"{name}: mean={m}, std={s}, |max|={mx:.3f}")
+
+
 @torch.no_grad()
-def sample_colorization(model, L, scheduler, num_steps, show_tqdm=False):
+def sample_colorization(model, L, scheduler, num_steps, show_tqdm=False, init_ab=None, generator=None):
     model.eval()
     B, _, H, W = L.shape
-    ab = torch.randn(B, 2, H, W, device=L.device)
+
+    if init_ab is None:
+        ab = torch.randn(B, 2, H, W, device=L.device, generator=generator)
+    else:
+        ab = init_ab.clone()
 
     scheduler.set_timesteps(num_steps)
     iterator = scheduler.timesteps
@@ -176,11 +186,14 @@ def train_model(
     train_noise_scheduler = DDPMScheduler(
         num_train_timesteps=1000,
         beta_schedule="squaredcos_cap_v2",
+        prediction_type="epsilon",
     )
 
     infer_noise_scheduler = DDPMScheduler(
         num_train_timesteps=1000,
         beta_schedule="squaredcos_cap_v2",
+        prediction_type="epsilon",
+        clip_sample=False,
     )
 
     start_epoch = 0
@@ -216,8 +229,17 @@ def train_model(
     fixed_batch = next(iter(val_dl))
     L_fix_all = fixed_batch["L"].to(DEVICE)
     ab_fix_all = fixed_batch["ab"].to(DEVICE)
+
+    n_vis_fix = min(5, L_fix_all.size(0))
+    L_fix = L_fix_all[:n_vis_fix]
+    ab_fix = ab_fix_all[:n_vis_fix]
+
+    gen_fix = torch.Generator(device=DEVICE).manual_seed(1234)
+    fixed_init_ab = torch.randn_like(ab_fix, generator=gen_fix)
+
     val_iter = iter(val_dl)
     check = True
+
     for epoch in range(start_epoch, epochs):
         net_G.train()
         train_loss = 0.0
@@ -237,12 +259,14 @@ def train_model(
 
             pred_noise = net_G(ab_t, L, t)
             loss = F.mse_loss(pred_noise, noise)
-            if epoch == 0 and check == True: 
+
+            if epoch == 0 and check:
                 baseline = F.mse_loss(torch.zeros_like(noise), noise).item()
                 print("noise mean/std:", noise.mean().item(), noise.std().item())
                 print("baseline mse (pred=0):", baseline)
                 print("current loss:", loss.item())
                 check = False
+
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
@@ -292,12 +316,13 @@ def train_model(
         )
 
         with torch.no_grad():
-            n_vis = min(5, L_fix_all.size(0))
-            L_fix = L_fix_all[:n_vis]
-            ab_fix = ab_fix_all[:n_vis]
-
             fake_fix = sample_colorization(
-                net_G, L_fix, infer_noise_scheduler, inference_steps, show_tqdm=show_sampling_tqdm
+                net_G,
+                L_fix,
+                infer_noise_scheduler,
+                num_steps=inference_steps,
+                show_tqdm=show_sampling_tqdm,
+                init_ab=fixed_init_ab,
             )
 
             try:
@@ -313,8 +338,15 @@ def train_model(
             ab_r = ab_r_all[:n_vis_r]
 
             fake_rand = sample_colorization(
-                net_G, L_r, infer_noise_scheduler, inference_steps, show_tqdm=show_sampling_tqdm
+                net_G,
+                L_r,
+                infer_noise_scheduler,
+                num_steps=inference_steps,
+                show_tqdm=show_sampling_tqdm,
             )
+
+        stat_ab("real_fix", ab_fix)
+        stat_ab("fake_fix", fake_fix)
 
         net_G.train()
 
