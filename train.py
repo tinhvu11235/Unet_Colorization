@@ -235,7 +235,8 @@ def train_model(
     ab_fix = ab_fix_all[:n_vis_fix]
 
     gen_fix = torch.Generator(device=DEVICE).manual_seed(1234)
-    fixed_init_ab = torch.randn_like(ab_fix, generator=gen_fix)
+    fixed_init_ab = torch.randn(
+    ab_fix.shape, device=ab_fix.device, dtype=ab_fix.dtype, generator=gen_fix)
 
     val_iter = iter(val_dl)
     check = True
