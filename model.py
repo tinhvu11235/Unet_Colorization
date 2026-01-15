@@ -114,28 +114,27 @@ class UNetDenoiserFiLM(nn.Module):
         self.enc3 = Encoder(256, 512, groups=groups)
         self.enc4 = Encoder(512, 1024, groups=groups)
 
-        self.dec1 = DecoderFiLM(1024 + 512, 512, z_dim, film_on_skip, 512, groups=groups)
-        self.dec2 = DecoderFiLM(512 + 256, 256, z_dim, film_on_skip, 256, groups=groups)
-        self.dec3 = DecoderFiLM(256 + 128, 128, z_dim, film_on_skip, 128, groups=groups)
-        self.dec4 = DecoderFiLM(128 + 64, 64, z_dim, film_on_skip, 64, groups=groups)
+        self.dec1 = DecoderFiLM(1024 + 1024, 512, z_dim, film_on_skip, 1024, groups=groups)
+        self.dec2 = DecoderFiLM(512 + 512, 256, z_dim, film_on_skip, 512, groups=groups)
+        self.dec3 = DecoderFiLM(256 + 256, 128, z_dim, film_on_skip, 256, groups=groups)
+        self.dec4 = DecoderFiLM(128 + 128, 64, z_dim, film_on_skip, 128, groups=groups)
 
         self.output_layer = nn.Conv2d(64, 2, kernel_size=1)
 
-    def compute_z_ctx(self, L):
+    def compute_L_feats(self, L):
         l1 = self.L_input(L)
         l2 = self.L_enc1(l1)
         l3 = self.L_enc2(l2)
         l4 = self.L_enc3(l3)
         l5 = self.L_enc4(l4)
-        return self.global_ctx(l5)
+        z_ctx = self.global_ctx(l5)
+        return z_ctx, (l1, l2, l3, l4)
 
     def forward(self, ab_t, L, t, z_ctx=None):
         t_emb = get_timestep_embedding(t, self.time_mlp[0].in_features)
         z_t = self.time_mlp(t_emb)
 
-        if z_ctx is None:
-            z_ctx = self.compute_z_ctx(L)
-
+        z_ctx, (l1, l2, l3, l4) = self.compute_L_feats(L)
         z = self.fuse(torch.cat([z_t, z_ctx], dim=1))
 
         x = torch.cat([ab_t, L], dim=1)
@@ -145,10 +144,15 @@ class UNetDenoiserFiLM(nn.Module):
         x4 = self.enc3(x3)
         x5 = self.enc4(x4)
 
-        d1 = self.dec1(x5, x4, z)
-        d2 = self.dec2(d1, x3, z)
-        d3 = self.dec3(d2, x2, z)
-        d4 = self.dec4(d3, x1, z)
+        s4 = torch.cat([x4, l4], dim=1)
+        s3 = torch.cat([x3, l3], dim=1)
+        s2 = torch.cat([x2, l2], dim=1)
+        s1 = torch.cat([x1, l1], dim=1)
+
+        d1 = self.dec1(x5, s4, z)
+        d2 = self.dec2(d1, s3, z)
+        d3 = self.dec3(d2, s2, z)
+        d4 = self.dec4(d3, s1, z)
 
         return self.output_layer(d4)
 
