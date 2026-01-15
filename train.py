@@ -22,6 +22,11 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 config = {}
 
+LOG_STEPS_FIX = 1000
+LOG_STEPS_RAND = 1000
+CLAMP_AB = 1.5
+MIN_SNR_GAMMA = 5.0
+
 
 def lab_to_rgb(L, ab):
     L = (L + 1.0) * 50.0
@@ -140,25 +145,38 @@ def stat_ab(name: str, ab: torch.Tensor):
     print(f"{name}: mean={m}, std={s}, |max|={mx:.3f}")
 
 
+def min_snr_weight(scheduler: DDPMScheduler, t: torch.Tensor, gamma: float = 5.0) -> torch.Tensor:
+    alphas_cumprod = scheduler.alphas_cumprod.to(t.device)
+    a = alphas_cumprod[t]
+    snr = a / (1 - a)
+    w = torch.minimum(snr, torch.full_like(snr, gamma)) / snr
+    return w
+
+
 @torch.no_grad()
-def sample_colorization(model, L, scheduler, num_steps, show_tqdm=False, init_ab=None, generator=None):
+def sample_colorization(model, L, scheduler, num_steps, show_tqdm=False, init_ab=None, generator=None, clamp_ab=None):
     model.eval()
     B, _, H, W = L.shape
 
+    scheduler.set_timesteps(num_steps)
+
     if init_ab is None:
         ab = torch.randn(B, 2, H, W, device=L.device, generator=generator)
+        ab = ab * scheduler.init_noise_sigma
     else:
         ab = init_ab.clone()
 
-    scheduler.set_timesteps(num_steps)
     iterator = scheduler.timesteps
     if show_tqdm:
         iterator = tqdm(iterator, desc="Sampling", leave=False)
 
     for t in iterator:
-        t_batch = torch.full((B,), int(t), device=L.device, dtype=torch.long)
+        t_int = int(t)
+        t_batch = torch.full((B,), t_int, device=L.device, dtype=torch.long)
         pred_noise = model(ab, L, t_batch)
-        ab = scheduler.step(pred_noise, int(t), ab).prev_sample
+        ab = scheduler.step(pred_noise, t_int, ab).prev_sample
+        if clamp_ab is not None:
+            ab = ab.clamp(-clamp_ab, clamp_ab)
 
     return ab
 
@@ -178,7 +196,7 @@ def train_model(
     ckpt_cache_dir = os.path.join(save_dir, "_ckpt_cache")
     checkpoint_path = resolve_checkpoint_path(checkpoint_path, ckpt_cache_dir)
 
-    optimizer = optim.Adam(net_G.parameters(), lr=lr)
+    optimizer = optim.AdamW(net_G.parameters(), lr=lr, weight_decay=1e-4)
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.95, patience=5
     )
@@ -193,7 +211,7 @@ def train_model(
         num_train_timesteps=1000,
         beta_schedule="squaredcos_cap_v2",
         prediction_type="epsilon",
-        clip_sample=False,
+        clip_sample=True,
     )
 
     start_epoch = 0
@@ -236,7 +254,9 @@ def train_model(
 
     gen_fix = torch.Generator(device=DEVICE).manual_seed(1234)
     fixed_init_ab = torch.randn(
-    ab_fix.shape, device=ab_fix.device, dtype=ab_fix.dtype, generator=gen_fix)
+        ab_fix.shape, device=ab_fix.device, dtype=ab_fix.dtype, generator=gen_fix
+    )
+    fixed_init_ab = fixed_init_ab * infer_noise_scheduler.init_noise_sigma
 
     val_iter = iter(val_dl)
     check = True
@@ -259,7 +279,10 @@ def train_model(
             ab_t = train_noise_scheduler.add_noise(ab, noise, t)
 
             pred_noise = net_G(ab_t, L, t)
-            loss = F.mse_loss(pred_noise, noise)
+
+            mse = (pred_noise - noise).pow(2).mean(dim=[1, 2, 3])
+            w = min_snr_weight(train_noise_scheduler, t, gamma=MIN_SNR_GAMMA)
+            loss = (w * mse).mean()
 
             if epoch == 0 and check:
                 baseline = F.mse_loss(torch.zeros_like(noise), noise).item()
@@ -294,7 +317,11 @@ def train_model(
                 ab_t = train_noise_scheduler.add_noise(ab_v, noise, t)
 
                 pred_noise = net_G(ab_t, L_v, t)
-                batch_v = F.mse_loss(pred_noise, noise).item()
+
+                mse = (pred_noise - noise).pow(2).mean(dim=[1, 2, 3])
+                w = min_snr_weight(train_noise_scheduler, t, gamma=MIN_SNR_GAMMA)
+                batch_v = (w * mse).mean().item()
+
                 val_loss += batch_v
                 vbar.set_postfix(val_mse=f"{batch_v:.4f}")
 
@@ -321,9 +348,10 @@ def train_model(
                 net_G,
                 L_fix,
                 infer_noise_scheduler,
-                num_steps=inference_steps,
+                num_steps=LOG_STEPS_FIX,
                 show_tqdm=show_sampling_tqdm,
                 init_ab=fixed_init_ab,
+                clamp_ab=CLAMP_AB,
             )
 
             try:
@@ -338,12 +366,16 @@ def train_model(
             L_r = L_r_all[:n_vis_r]
             ab_r = ab_r_all[:n_vis_r]
 
+            gen_rand = torch.Generator(device=DEVICE).manual_seed(999 + epoch)
             fake_rand = sample_colorization(
                 net_G,
                 L_r,
                 infer_noise_scheduler,
-                num_steps=inference_steps,
+                num_steps=LOG_STEPS_RAND,
                 show_tqdm=show_sampling_tqdm,
+                init_ab=None,
+                generator=gen_rand,
+                clamp_ab=CLAMP_AB,
             )
 
         stat_ab("real_fix", ab_fix)
@@ -360,6 +392,10 @@ def train_model(
             "images/real_fix": log_image_wandb(L_fix, ab_fix),
             "images/fake_rand": log_image_wandb(L_r, fake_rand),
             "images/real_rand": log_image_wandb(L_r, ab_r),
+            "log_steps_fix": LOG_STEPS_FIX,
+            "log_steps_rand": LOG_STEPS_RAND,
+            "min_snr_gamma": MIN_SNR_GAMMA,
+            "clip_sample": True,
         })
 
         print(
