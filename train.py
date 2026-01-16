@@ -27,6 +27,10 @@ LOG_STEPS_RAND = 1000
 CLAMP_AB = 1.5
 MIN_SNR_GAMMA = 5.0
 
+X0_LOSS_WEIGHT = 0.3
+X0_LOSS_TYPE = "smooth_l1"  # "l1" | "smooth_l1" | "mse"
+X0_CLAMP = 1.0
+
 
 def lab_to_rgb(L, ab):
     L = (L + 1.0) * 50.0
@@ -153,6 +157,23 @@ def min_snr_weight(scheduler: DDPMScheduler, t: torch.Tensor, gamma: float = 5.0
     return w
 
 
+def predict_x0_from_eps(scheduler: DDPMScheduler, x_t: torch.Tensor, eps_hat: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    alphas_cumprod = scheduler.alphas_cumprod.to(x_t.device)  # (T,)
+    a = alphas_cumprod[t].view(-1, 1, 1, 1)
+    x0_hat = (x_t - (1.0 - a).sqrt() * eps_hat) / (a.sqrt() + 1e-8)
+    if X0_CLAMP is not None:
+        x0_hat = x0_hat.clamp(-float(X0_CLAMP), float(X0_CLAMP))
+    return x0_hat
+
+
+def x0_loss_fn(x0_hat: torch.Tensor, x0: torch.Tensor) -> torch.Tensor:
+    if X0_LOSS_TYPE == "l1":
+        return (x0_hat - x0).abs().mean()
+    if X0_LOSS_TYPE == "mse":
+        return (x0_hat - x0).pow(2).mean()
+    return F.smooth_l1_loss(x0_hat, x0, reduction="mean")
+
+
 @torch.no_grad()
 def sample_colorization(model, L, scheduler, num_steps, show_tqdm=False, init_ab=None, generator=None, clamp_ab=None):
     model.eval()
@@ -173,8 +194,11 @@ def sample_colorization(model, L, scheduler, num_steps, show_tqdm=False, init_ab
     for t in iterator:
         t_int = int(t)
         t_batch = torch.full((B,), t_int, device=L.device, dtype=torch.long)
-        pred_noise = model(ab, L, t_batch)
+
+        model_in = scheduler.scale_model_input(ab, t_int)
+        pred_noise = model(model_in, L, t_batch)
         ab = scheduler.step(pred_noise, t_int, ab).prev_sample
+
         if clamp_ab is not None:
             ab = ab.clamp(-clamp_ab, clamp_ab)
 
@@ -264,6 +288,8 @@ def train_model(
     for epoch in range(start_epoch, epochs):
         net_G.train()
         train_loss = 0.0
+        train_eps = 0.0
+        train_x0 = 0.0
 
         pbar = tqdm(train_dl, desc=f"Train {epoch+1}/{epochs}", leave=False)
         for data in pbar:
@@ -282,13 +308,18 @@ def train_model(
 
             mse = (pred_noise - noise).pow(2).mean(dim=[1, 2, 3])
             w = min_snr_weight(train_noise_scheduler, t, gamma=MIN_SNR_GAMMA)
-            loss = (w * mse).mean()
+            loss_eps = (w * mse).mean()
+
+            x0_hat = predict_x0_from_eps(train_noise_scheduler, ab_t, pred_noise, t)
+            loss_x0 = x0_loss_fn(x0_hat, ab)
+
+            loss = loss_eps + float(X0_LOSS_WEIGHT) * loss_x0
 
             if epoch == 0 and check:
                 baseline = F.mse_loss(torch.zeros_like(noise), noise).item()
                 print("noise mean/std:", noise.mean().item(), noise.std().item())
                 print("baseline mse (pred=0):", baseline)
-                print("current loss:", loss.item())
+                print("loss_eps:", loss_eps.item(), "loss_x0:", loss_x0.item(), "loss_total:", loss.item())
                 check = False
 
             optimizer.zero_grad(set_to_none=True)
@@ -296,12 +327,25 @@ def train_model(
             optimizer.step()
 
             train_loss += loss.item()
-            pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
+            train_eps += loss_eps.item()
+            train_x0 += loss_x0.item()
+            pbar.set_postfix(
+                loss=f"{loss.item():.4f}",
+                eps=f"{loss_eps.item():.4f}",
+                x0=f"{loss_x0.item():.4f}",
+                lr=f"{optimizer.param_groups[0]['lr']:.2e}",
+            )
 
-        train_loss /= max(1, len(train_dl))
+        n_train = max(1, len(train_dl))
+        train_loss /= n_train
+        train_eps /= n_train
+        train_x0 /= n_train
 
         net_G.eval()
         val_loss = 0.0
+        val_eps = 0.0
+        val_x0 = 0.0
+
         with torch.no_grad():
             vbar = tqdm(val_dl, desc="Val", leave=False)
             for val in vbar:
@@ -320,12 +364,24 @@ def train_model(
 
                 mse = (pred_noise - noise).pow(2).mean(dim=[1, 2, 3])
                 w = min_snr_weight(train_noise_scheduler, t, gamma=MIN_SNR_GAMMA)
-                batch_v = (w * mse).mean().item()
+                loss_eps_b = (w * mse).mean()
 
-                val_loss += batch_v
-                vbar.set_postfix(val_mse=f"{batch_v:.4f}")
+                x0_hat = predict_x0_from_eps(train_noise_scheduler, ab_t, pred_noise, t)
+                loss_x0_b = x0_loss_fn(x0_hat, ab_v)
 
-        val_loss /= max(1, len(val_dl))
+                loss_b = loss_eps_b + float(X0_LOSS_WEIGHT) * loss_x0_b
+
+                val_loss += loss_b.item()
+                val_eps += loss_eps_b.item()
+                val_x0 += loss_x0_b.item()
+
+                vbar.set_postfix(val=f"{loss_b.item():.4f}", eps=f"{loss_eps_b.item():.4f}", x0=f"{loss_x0_b.item():.4f}")
+
+        n_val = max(1, len(val_dl))
+        val_loss /= n_val
+        val_eps /= n_val
+        val_x0 /= n_val
+
         lr_scheduler.step(val_loss)
 
         is_best = val_loss < best_val
@@ -386,7 +442,11 @@ def train_model(
         wandb.log({
             "epoch": epoch + 1,
             "train_loss": train_loss,
+            "train_eps": train_eps,
+            "train_x0": train_x0,
             "val_loss": val_loss,
+            "val_eps": val_eps,
+            "val_x0": val_x0,
             "lr": optimizer.param_groups[0]["lr"],
             "images/fake_fix": log_image_wandb(L_fix, fake_fix),
             "images/real_fix": log_image_wandb(L_fix, ab_fix),
@@ -395,12 +455,17 @@ def train_model(
             "log_steps_fix": LOG_STEPS_FIX,
             "log_steps_rand": LOG_STEPS_RAND,
             "min_snr_gamma": MIN_SNR_GAMMA,
+            "x0_loss_weight": float(X0_LOSS_WEIGHT),
+            "x0_loss_type": X0_LOSS_TYPE,
+            "x0_clamp": X0_CLAMP,
             "clip_sample": True,
         })
 
         print(
             f"Epoch {epoch+1}/{epochs} | "
-            f"train_loss: {train_loss:.6f} | val_loss: {val_loss:.6f}"
+            f"train_loss: {train_loss:.6f} | val_loss: {val_loss:.6f} | "
+            f"train_eps: {train_eps:.6f} | train_x0: {train_x0:.6f} | "
+            f"val_eps: {val_eps:.6f} | val_x0: {val_x0:.6f}"
         )
 
     wandb.finish()
