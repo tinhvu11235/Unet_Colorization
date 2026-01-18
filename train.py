@@ -25,11 +25,11 @@ config = {}
 LOG_STEPS_FIX = 1000
 LOG_STEPS_RAND = 1000
 CLAMP_AB = 1.5
-MIN_SNR_GAMMA = 5.0
+MIN_SNR_GAMMA = None
 
-X0_LOSS_WEIGHT = 0.3
-X0_LOSS_TYPE = "smooth_l1"  # "l1" | "smooth_l1" | "mse"
-X0_CLAMP = 1.0
+X0_LOSS_WEIGHT = 0.0
+X0_LOSS_TYPE = "smooth_l1"
+X0_CLAMP = None
 
 
 def lab_to_rgb(L, ab):
@@ -158,7 +158,7 @@ def min_snr_weight(scheduler: DDPMScheduler, t: torch.Tensor, gamma: float = 5.0
 
 
 def predict_x0_from_eps(scheduler: DDPMScheduler, x_t: torch.Tensor, eps_hat: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-    alphas_cumprod = scheduler.alphas_cumprod.to(x_t.device)  # (T,)
+    alphas_cumprod = scheduler.alphas_cumprod.to(x_t.device)
     a = alphas_cumprod[t].view(-1, 1, 1, 1)
     x0_hat = (x_t - (1.0 - a).sqrt() * eps_hat) / (a.sqrt() + 1e-8)
     if X0_CLAMP is not None:
@@ -235,7 +235,7 @@ def train_model(
         num_train_timesteps=1000,
         beta_schedule="squaredcos_cap_v2",
         prediction_type="epsilon",
-        clip_sample=True,
+        clip_sample=False,
     )
 
     start_epoch = 0
@@ -306,14 +306,10 @@ def train_model(
 
             pred_noise = net_G(ab_t, L, t)
 
-            mse = (pred_noise - noise).pow(2).mean(dim=[1, 2, 3])
-            w = min_snr_weight(train_noise_scheduler, t, gamma=MIN_SNR_GAMMA)
-            loss_eps = (w * mse).mean()
+            loss_eps = (pred_noise - noise).pow(2).mean()
 
-            x0_hat = predict_x0_from_eps(train_noise_scheduler, ab_t, pred_noise, t)
-            loss_x0 = x0_loss_fn(x0_hat, ab)
-
-            loss = loss_eps + float(X0_LOSS_WEIGHT) * loss_x0
+            loss_x0 = torch.tensor(0.0, device=DEVICE)
+            loss = loss_eps
 
             if epoch == 0 and check:
                 baseline = F.mse_loss(torch.zeros_like(noise), noise).item()
@@ -362,14 +358,10 @@ def train_model(
 
                 pred_noise = net_G(ab_t, L_v, t)
 
-                mse = (pred_noise - noise).pow(2).mean(dim=[1, 2, 3])
-                w = min_snr_weight(train_noise_scheduler, t, gamma=MIN_SNR_GAMMA)
-                loss_eps_b = (w * mse).mean()
+                loss_eps_b = (pred_noise - noise).pow(2).mean()
 
-                x0_hat = predict_x0_from_eps(train_noise_scheduler, ab_t, pred_noise, t)
-                loss_x0_b = x0_loss_fn(x0_hat, ab_v)
-
-                loss_b = loss_eps_b + float(X0_LOSS_WEIGHT) * loss_x0_b
+                loss_x0_b = torch.tensor(0.0, device=DEVICE)
+                loss_b = loss_eps_b
 
                 val_loss += loss_b.item()
                 val_eps += loss_eps_b.item()
@@ -458,7 +450,7 @@ def train_model(
             "x0_loss_weight": float(X0_LOSS_WEIGHT),
             "x0_loss_type": X0_LOSS_TYPE,
             "x0_clamp": X0_CLAMP,
-            "clip_sample": True,
+            "clip_sample": False,
         })
 
         print(
