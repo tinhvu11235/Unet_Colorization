@@ -22,22 +22,16 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 config = {}
 
-# Log sampling số step giống inference thực tế
 LOG_STEPS_FIX = 1000
 LOG_STEPS_RAND = 1000
 
-# Min-SNR
-MIN_SNR_GAMMA = 5.0
-
-# X0 reconstruction loss (dùng ab groundtruth tham gia loss)
 X0_LOSS_WEIGHT = 0.3
 X0_LOSS_TYPE = "smooth_l1"  # "l1" | "smooth_l1" | "mse"
 
-# Dynamic thresholding (áp trong sampling/log)
-DT_PERCENTILE = 0.995   # gợi ý: 0.99 ~ 0.995; 0.8 thường quá gắt => nhạt màu
-DT_CLAMP_MIN = 1.0      # s >= 1 để không phóng đại (scale-up)
+DT_PERCENTILE = 0.995
+DT_CLAMP_MIN = 1.0
 DT_APPLY_EVERY_STEP = True
-DT_LAST_K_STEPS = 200   # dùng nếu DT_APPLY_EVERY_STEP=False
+DT_LAST_K_STEPS = 200
 
 
 def lab_to_rgb(L, ab):
@@ -157,14 +151,6 @@ def stat_ab(name: str, ab: torch.Tensor):
     print(f"{name}: mean={m}, std={s}, |max|={mx:.3f}")
 
 
-def min_snr_weight(scheduler: DDPMScheduler, t: torch.Tensor, gamma: float = 5.0) -> torch.Tensor:
-    alphas_cumprod = scheduler.alphas_cumprod.to(t.device)
-    a = alphas_cumprod[t]
-    snr = a / (1 - a)
-    w = torch.minimum(snr, torch.full_like(snr, gamma)) / snr
-    return w
-
-
 def x0_loss_fn(x0_hat: torch.Tensor, x0: torch.Tensor) -> torch.Tensor:
     if X0_LOSS_TYPE == "l1":
         return (x0_hat - x0).abs().mean()
@@ -174,7 +160,6 @@ def x0_loss_fn(x0_hat: torch.Tensor, x0: torch.Tensor) -> torch.Tensor:
 
 
 def _right_pad_dims_to(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-    # t: (B,) -> (B,1,1,1,...) broadcast theo x
     while t.ndim < x.ndim:
         t = t.view(t.shape[0], *([1] * (x.ndim - 1)))
     return t
@@ -182,15 +167,11 @@ def _right_pad_dims_to(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def dynamic_threshold(img: torch.Tensor, percentile: float = 0.995, clamp_min: float = 1.0) -> torch.Tensor:
-    """
-    img: (B,C,H,W)
-    Lưu ý: đây KHÔNG phải clamp cứng. Nó clamp theo +/-s rồi chia s -> về [-1,1] theo rescale mềm.
-    """
     B = img.shape[0]
     flat = img.abs().reshape(B, -1)
-    s = torch.quantile(flat, percentile, dim=1)           # (B,)
-    s = torch.clamp(s, min=clamp_min)                     # s >= 1
-    s = _right_pad_dims_to(img, s)                        # (B,1,1,1)
+    s = torch.quantile(flat, percentile, dim=1)
+    s = torch.clamp(s, min=clamp_min)
+    s = _right_pad_dims_to(img, s)
     img = img.clamp(-s, s) / s
     return img
 
@@ -208,10 +189,6 @@ def sample_colorization(
     dt_apply_every_step: bool = DT_APPLY_EVERY_STEP,
     dt_last_k_steps: int = DT_LAST_K_STEPS,
 ):
-    """
-    Trả về x0_hat đã dynamic-threshold ở bước cuối (dùng để render/log).
-    Không clamp x_t (ab) mỗi step.
-    """
     model.eval()
     B, _, H, W = L.shape
 
@@ -278,8 +255,6 @@ def train_model(
         prediction_type="epsilon",
     )
 
-    # Inference scheduler: để clip_sample=False (tránh double clip),
-    # dynamic threshold đã chịu trách nhiệm kìm x0_hat.
     infer_noise_scheduler = DDPMScheduler(
         num_train_timesteps=1000,
         beta_schedule="squaredcos_cap_v2",
@@ -344,11 +319,9 @@ def train_model(
 
             pred_noise = net_G(ab_t, L, t)
 
-            mse = (pred_noise - noise).pow(2).mean(dim=[1, 2, 3])
-            w = min_snr_weight(train_noise_scheduler, t, gamma=MIN_SNR_GAMMA)
-            loss_eps = (w * mse).mean()
+            # SNR OFF: loss_eps = MSE thuần
+            loss_eps = (pred_noise - noise).pow(2).mean()
 
-            # x0_hat từ epsilon (KHÔNG clamp)
             a = alphas_cumprod_train[t].view(-1, 1, 1, 1)
             x0_hat = (ab_t - (1.0 - a).sqrt() * pred_noise) / (a.sqrt() + 1e-8)
             loss_x0 = x0_loss_fn(x0_hat, ab)
@@ -401,9 +374,7 @@ def train_model(
 
                 pred_noise = net_G(ab_t, L_v, t)
 
-                mse = (pred_noise - noise).pow(2).mean(dim=[1, 2, 3])
-                w = min_snr_weight(train_noise_scheduler, t, gamma=MIN_SNR_GAMMA)
-                loss_eps_b = (w * mse).mean()
+                loss_eps_b = (pred_noise - noise).pow(2).mean()
 
                 a = alphas_cumprod_train[t].view(-1, 1, 1, 1)
                 x0_hat = (ab_t - (1.0 - a).sqrt() * pred_noise) / (a.sqrt() + 1e-8)
@@ -438,7 +409,6 @@ def train_model(
             is_best=is_best,
         )
 
-        # --- Sampling/log đúng kiểu inference 1000 step, dùng dynamic threshold ---
         with torch.no_grad():
             fake_fix = sample_colorization(
                 net_G,
@@ -500,7 +470,6 @@ def train_model(
             "log_steps_fix": LOG_STEPS_FIX,
             "log_steps_rand": LOG_STEPS_RAND,
 
-            "min_snr_gamma": MIN_SNR_GAMMA,
             "x0_loss_weight": float(X0_LOSS_WEIGHT),
             "x0_loss_type": X0_LOSS_TYPE,
 
@@ -508,6 +477,8 @@ def train_model(
             "dt_clamp_min": float(DT_CLAMP_MIN),
             "dt_apply_every_step": bool(DT_APPLY_EVERY_STEP),
             "dt_last_k_steps": int(DT_LAST_K_STEPS),
+
+            "snr_weighting": 0,
         })
 
         print(
