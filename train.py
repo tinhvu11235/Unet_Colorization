@@ -24,12 +24,15 @@ config = {}
 
 LOG_STEPS_FIX = 1000
 LOG_STEPS_RAND = 1000
-CLAMP_AB = 1.5
-MIN_SNR_GAMMA = None
+MIN_SNR_GAMMA = 5.0
 
-X0_LOSS_WEIGHT = 0.0
-X0_LOSS_TYPE = "smooth_l1"
-X0_CLAMP = None
+X0_LOSS_WEIGHT = 0.3
+X0_LOSS_TYPE = "smooth_l1"  # "l1" | "smooth_l1" | "mse"
+X0_CLAMP = 1.0
+
+X0_RANGE_LIMIT = 1.0
+RANGE_LOSS_WEIGHT = 0.01
+RANGE_POWER = 2.0
 
 
 def lab_to_rgb(L, ab):
@@ -157,15 +160,6 @@ def min_snr_weight(scheduler: DDPMScheduler, t: torch.Tensor, gamma: float = 5.0
     return w
 
 
-def predict_x0_from_eps(scheduler: DDPMScheduler, x_t: torch.Tensor, eps_hat: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-    alphas_cumprod = scheduler.alphas_cumprod.to(x_t.device)
-    a = alphas_cumprod[t].view(-1, 1, 1, 1)
-    x0_hat = (x_t - (1.0 - a).sqrt() * eps_hat) / (a.sqrt() + 1e-8)
-    if X0_CLAMP is not None:
-        x0_hat = x0_hat.clamp(-float(X0_CLAMP), float(X0_CLAMP))
-    return x0_hat
-
-
 def x0_loss_fn(x0_hat: torch.Tensor, x0: torch.Tensor) -> torch.Tensor:
     if X0_LOSS_TYPE == "l1":
         return (x0_hat - x0).abs().mean()
@@ -175,7 +169,16 @@ def x0_loss_fn(x0_hat: torch.Tensor, x0: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
-def sample_colorization(model, L, scheduler, num_steps, show_tqdm=False, init_ab=None, generator=None, clamp_ab=None):
+def sample_colorization(
+    model,
+    L,
+    scheduler,
+    num_steps,
+    show_tqdm=False,
+    init_ab=None,
+    generator=None,
+    x0_clip: float | None = 1.0,
+):
     model.eval()
     B, _, H, W = L.shape
 
@@ -191,16 +194,22 @@ def sample_colorization(model, L, scheduler, num_steps, show_tqdm=False, init_ab
     if show_tqdm:
         iterator = tqdm(iterator, desc="Sampling", leave=False)
 
+    alphas_cumprod = scheduler.alphas_cumprod.to(L.device)
+
     for t in iterator:
         t_int = int(t)
         t_batch = torch.full((B,), t_int, device=L.device, dtype=torch.long)
 
         model_in = scheduler.scale_model_input(ab, t_int)
-        pred_noise = model(model_in, L, t_batch)
-        ab = scheduler.step(pred_noise, t_int, ab).prev_sample
+        eps_hat = model(model_in, L, t_batch)
 
-        if clamp_ab is not None:
-            ab = ab.clamp(-clamp_ab, clamp_ab)
+        if x0_clip is not None:
+            a = alphas_cumprod[t_int].view(1, 1, 1, 1)
+            x0_hat = (ab - (1.0 - a).sqrt() * eps_hat) / (a.sqrt() + 1e-8)
+            x0_hat = x0_hat.clamp(-float(x0_clip), float(x0_clip))
+            eps_hat = (ab - a.sqrt() * x0_hat) / ((1.0 - a).sqrt() + 1e-8)
+
+        ab = scheduler.step(eps_hat, t_int, ab).prev_sample
 
     return ab
 
@@ -235,7 +244,7 @@ def train_model(
         num_train_timesteps=1000,
         beta_schedule="squaredcos_cap_v2",
         prediction_type="epsilon",
-        clip_sample=False,
+        clip_sample=True,
     )
 
     start_epoch = 0
@@ -285,11 +294,16 @@ def train_model(
     val_iter = iter(val_dl)
     check = True
 
+    alphas_cumprod_train = train_noise_scheduler.alphas_cumprod.to(DEVICE)
+
     for epoch in range(start_epoch, epochs):
         net_G.train()
         train_loss = 0.0
         train_eps = 0.0
         train_x0 = 0.0
+        train_range = 0.0
+        train_range_mean = 0.0
+        train_range_max = 0.0
 
         pbar = tqdm(train_dl, desc=f"Train {epoch+1}/{epochs}", leave=False)
         for data in pbar:
@@ -306,29 +320,51 @@ def train_model(
 
             pred_noise = net_G(ab_t, L, t)
 
-            loss_eps = (pred_noise - noise).pow(2).mean()
+            mse = (pred_noise - noise).pow(2).mean(dim=[1, 2, 3])
+            w = min_snr_weight(train_noise_scheduler, t, gamma=MIN_SNR_GAMMA)
+            loss_eps = (w * mse).mean()
 
-            loss_x0 = torch.tensor(0.0, device=DEVICE)
-            loss = loss_eps
+            a = alphas_cumprod_train[t].view(-1, 1, 1, 1)
+            x0_hat_unclamped = (ab_t - (1.0 - a).sqrt() * pred_noise) / (a.sqrt() + 1e-8)
+
+            x0_hat = x0_hat_unclamped
+            if X0_CLAMP is not None:
+                x0_hat = x0_hat.clamp(-float(X0_CLAMP), float(X0_CLAMP))
+
+            loss_x0 = x0_loss_fn(x0_hat, ab)
+
+            lim = float(X0_RANGE_LIMIT)
+            range_violation = (x0_hat_unclamped.abs() - lim).relu()
+            loss_range = range_violation.pow(float(RANGE_POWER)).mean()
+
+            loss = loss_eps + float(X0_LOSS_WEIGHT) * loss_x0 + float(RANGE_LOSS_WEIGHT) * loss_range
 
             if epoch == 0 and check:
                 baseline = F.mse_loss(torch.zeros_like(noise), noise).item()
                 print("noise mean/std:", noise.mean().item(), noise.std().item())
                 print("baseline mse (pred=0):", baseline)
-                print("loss_eps:", loss_eps.item(), "loss_x0:", loss_x0.item(), "loss_total:", loss.item())
+                print("loss_eps:", loss_eps.item(), "loss_x0:", loss_x0.item(), "loss_range:", loss_range.item(), "loss_total:", loss.item())
                 check = False
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
 
+            rv_mean = range_violation.mean().detach()
+            rv_max = range_violation.max().detach()
+
             train_loss += loss.item()
             train_eps += loss_eps.item()
             train_x0 += loss_x0.item()
+            train_range += loss_range.item()
+            train_range_mean += rv_mean.item()
+            train_range_max += rv_max.item()
+
             pbar.set_postfix(
                 loss=f"{loss.item():.4f}",
                 eps=f"{loss_eps.item():.4f}",
                 x0=f"{loss_x0.item():.4f}",
+                rng=f"{loss_range.item():.4f}",
                 lr=f"{optimizer.param_groups[0]['lr']:.2e}",
             )
 
@@ -336,11 +372,17 @@ def train_model(
         train_loss /= n_train
         train_eps /= n_train
         train_x0 /= n_train
+        train_range /= n_train
+        train_range_mean /= n_train
+        train_range_max /= n_train
 
         net_G.eval()
         val_loss = 0.0
         val_eps = 0.0
         val_x0 = 0.0
+        val_range = 0.0
+        val_range_mean = 0.0
+        val_range_max = 0.0
 
         with torch.no_grad():
             vbar = tqdm(val_dl, desc="Val", leave=False)
@@ -358,21 +400,44 @@ def train_model(
 
                 pred_noise = net_G(ab_t, L_v, t)
 
-                loss_eps_b = (pred_noise - noise).pow(2).mean()
+                mse = (pred_noise - noise).pow(2).mean(dim=[1, 2, 3])
+                w = min_snr_weight(train_noise_scheduler, t, gamma=MIN_SNR_GAMMA)
+                loss_eps_b = (w * mse).mean()
 
-                loss_x0_b = torch.tensor(0.0, device=DEVICE)
-                loss_b = loss_eps_b
+                a = alphas_cumprod_train[t].view(-1, 1, 1, 1)
+                x0_hat_unclamped = (ab_t - (1.0 - a).sqrt() * pred_noise) / (a.sqrt() + 1e-8)
+
+                x0_hat = x0_hat_unclamped
+                if X0_CLAMP is not None:
+                    x0_hat = x0_hat.clamp(-float(X0_CLAMP), float(X0_CLAMP))
+
+                loss_x0_b = x0_loss_fn(x0_hat, ab_v)
+
+                lim = float(X0_RANGE_LIMIT)
+                range_violation = (x0_hat_unclamped.abs() - lim).relu()
+                loss_range_b = range_violation.pow(float(RANGE_POWER)).mean()
+
+                loss_b = loss_eps_b + float(X0_LOSS_WEIGHT) * loss_x0_b + float(RANGE_LOSS_WEIGHT) * loss_range_b
+
+                rv_mean = range_violation.mean().detach()
+                rv_max = range_violation.max().detach()
 
                 val_loss += loss_b.item()
                 val_eps += loss_eps_b.item()
                 val_x0 += loss_x0_b.item()
+                val_range += loss_range_b.item()
+                val_range_mean += rv_mean.item()
+                val_range_max += rv_max.item()
 
-                vbar.set_postfix(val=f"{loss_b.item():.4f}", eps=f"{loss_eps_b.item():.4f}", x0=f"{loss_x0_b.item():.4f}")
+                vbar.set_postfix(val=f"{loss_b.item():.4f}", eps=f"{loss_eps_b.item():.4f}", x0=f"{loss_x0_b.item():.4f}", rng=f"{loss_range_b.item():.4f}")
 
         n_val = max(1, len(val_dl))
         val_loss /= n_val
         val_eps /= n_val
         val_x0 /= n_val
+        val_range /= n_val
+        val_range_mean /= n_val
+        val_range_max /= n_val
 
         lr_scheduler.step(val_loss)
 
@@ -399,7 +464,7 @@ def train_model(
                 num_steps=LOG_STEPS_FIX,
                 show_tqdm=show_sampling_tqdm,
                 init_ab=fixed_init_ab,
-                clamp_ab=CLAMP_AB,
+                x0_clip=float(X0_RANGE_LIMIT),
             )
 
             try:
@@ -423,41 +488,51 @@ def train_model(
                 show_tqdm=show_sampling_tqdm,
                 init_ab=None,
                 generator=gen_rand,
-                clamp_ab=CLAMP_AB,
+                x0_clip=float(X0_RANGE_LIMIT),
             )
 
         stat_ab("real_fix", ab_fix)
         stat_ab("fake_fix", fake_fix)
 
-        net_G.train()
+        fake_fix_vis = fake_fix.clamp(-float(X0_RANGE_LIMIT), float(X0_RANGE_LIMIT))
+        fake_rand_vis = fake_rand.clamp(-float(X0_RANGE_LIMIT), float(X0_RANGE_LIMIT))
 
         wandb.log({
             "epoch": epoch + 1,
             "train_loss": train_loss,
             "train_eps": train_eps,
             "train_x0": train_x0,
+            "train_range": train_range,
+            "train_range_violation_mean": train_range_mean,
+            "train_range_violation_max": train_range_max,
             "val_loss": val_loss,
             "val_eps": val_eps,
             "val_x0": val_x0,
+            "val_range": val_range,
+            "val_range_violation_mean": val_range_mean,
+            "val_range_violation_max": val_range_max,
             "lr": optimizer.param_groups[0]["lr"],
-            "images/fake_fix": log_image_wandb(L_fix, fake_fix),
-            "images/real_fix": log_image_wandb(L_fix, ab_fix),
-            "images/fake_rand": log_image_wandb(L_r, fake_rand),
-            "images/real_rand": log_image_wandb(L_r, ab_r),
+            "images/fake_fix": log_image_wandb(L_fix, fake_fix_vis),
+            "images/real_fix": log_image_wandb(L_fix, ab_fix.clamp(-float(X0_RANGE_LIMIT), float(X0_RANGE_LIMIT))),
+            "images/fake_rand": log_image_wandb(L_r, fake_rand_vis),
+            "images/real_rand": log_image_wandb(L_r, ab_r.clamp(-float(X0_RANGE_LIMIT), float(X0_RANGE_LIMIT))),
             "log_steps_fix": LOG_STEPS_FIX,
             "log_steps_rand": LOG_STEPS_RAND,
             "min_snr_gamma": MIN_SNR_GAMMA,
             "x0_loss_weight": float(X0_LOSS_WEIGHT),
             "x0_loss_type": X0_LOSS_TYPE,
             "x0_clamp": X0_CLAMP,
-            "clip_sample": False,
+            "x0_range_limit": float(X0_RANGE_LIMIT),
+            "range_loss_weight": float(RANGE_LOSS_WEIGHT),
+            "range_power": float(RANGE_POWER),
+            "clip_sample": True,
         })
 
         print(
             f"Epoch {epoch+1}/{epochs} | "
             f"train_loss: {train_loss:.6f} | val_loss: {val_loss:.6f} | "
-            f"train_eps: {train_eps:.6f} | train_x0: {train_x0:.6f} | "
-            f"val_eps: {val_eps:.6f} | val_x0: {val_x0:.6f}"
+            f"train_eps: {train_eps:.6f} | train_x0: {train_x0:.6f} | train_rng: {train_range:.6f} | "
+            f"val_eps: {val_eps:.6f} | val_x0: {val_x0:.6f} | val_rng: {val_range:.6f}"
         )
 
     wandb.finish()
