@@ -5,7 +5,6 @@ import urllib.request
 
 import torch
 import torch.optim as optim
-import torch.nn.functional as F
 import wandb
 import numpy as np
 from skimage.color import lab2rgb
@@ -25,13 +24,10 @@ config = {}
 LOG_STEPS_FIX = 1000
 LOG_STEPS_RAND = 1000
 
-X0_LOSS_WEIGHT = 0.3
-X0_LOSS_TYPE = "smooth_l1"  # "l1" | "smooth_l1" | "mse"
+MIN_SNR_GAMMA = 5.0
 
 DT_PERCENTILE = 0.995
 DT_CLAMP_MIN = 1.0
-DT_APPLY_EVERY_STEP = True
-DT_LAST_K_STEPS = 200
 
 
 def lab_to_rgb(L, ab):
@@ -151,14 +147,6 @@ def stat_ab(name: str, ab: torch.Tensor):
     print(f"{name}: mean={m}, std={s}, |max|={mx:.3f}")
 
 
-def x0_loss_fn(x0_hat: torch.Tensor, x0: torch.Tensor) -> torch.Tensor:
-    if X0_LOSS_TYPE == "l1":
-        return (x0_hat - x0).abs().mean()
-    if X0_LOSS_TYPE == "mse":
-        return (x0_hat - x0).pow(2).mean()
-    return F.smooth_l1_loss(x0_hat, x0, reduction="mean")
-
-
 def _right_pad_dims_to(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
     while t.ndim < x.ndim:
         t = t.view(t.shape[0], *([1] * (x.ndim - 1)))
@@ -186,8 +174,6 @@ def sample_colorization(
     init_ab=None,
     generator=None,
     dt_percentile: float | None = DT_PERCENTILE,
-    dt_apply_every_step: bool = DT_APPLY_EVERY_STEP,
-    dt_last_k_steps: int = DT_LAST_K_STEPS,
 ):
     model.eval()
     B, _, H, W = L.shape
@@ -206,11 +192,9 @@ def sample_colorization(
         iterator = tqdm(iterator, desc="Sampling", leave=False)
 
     timesteps_list = list(iterator)
-    nT = len(timesteps_list)
 
     x0_hat = None
-
-    for i, t in enumerate(timesteps_list):
+    for t in timesteps_list:
         t_int = int(t)
         t_batch = torch.full((B,), t_int, device=L.device, dtype=torch.long)
 
@@ -220,13 +204,10 @@ def sample_colorization(
         a = alphas_cumprod[t_int].view(1, 1, 1, 1)
         x0_hat = (ab - (1.0 - a).sqrt() * eps_hat) / (a.sqrt() + 1e-8)
 
-        if dt_percentile is not None:
-            do_dt = dt_apply_every_step or (i >= (nT - int(dt_last_k_steps)))
-            if do_dt:
-                x0_hat = dynamic_threshold(x0_hat, percentile=float(dt_percentile), clamp_min=float(DT_CLAMP_MIN))
-                eps_hat = (ab - a.sqrt() * x0_hat) / ((1.0 - a).sqrt() + 1e-8)
-
         ab = scheduler.step(eps_hat, t_int, ab).prev_sample
+
+    if (dt_percentile is not None) and (x0_hat is not None):
+        x0_hat = dynamic_threshold(x0_hat, percentile=float(dt_percentile), clamp_min=float(DT_CLAMP_MIN))
 
     return x0_hat
 
@@ -304,7 +285,6 @@ def train_model(
         net_G.train()
         train_loss = 0.0
         train_eps = 0.0
-        train_x0 = 0.0
 
         pbar = tqdm(train_dl, desc=f"Train {epoch+1}/{epochs}", leave=False)
         for data in pbar:
@@ -319,20 +299,21 @@ def train_model(
 
             pred_noise = net_G(ab_t, L, t)
 
-            # SNR OFF: loss_eps = MSE thuần
-            loss_eps = (pred_noise - noise).pow(2).mean()
+            a = alphas_cumprod_train[t]
+            snr = a / (1.0 - a + 1e-8)
+            gamma = float(MIN_SNR_GAMMA)
+            w = torch.minimum(snr, torch.full_like(snr, gamma)) / (snr + 1e-8)
+            w = w.view(-1, 1, 1, 1)
 
-            a = alphas_cumprod_train[t].view(-1, 1, 1, 1)
-            x0_hat = (ab_t - (1.0 - a).sqrt() * pred_noise) / (a.sqrt() + 1e-8)
-            loss_x0 = x0_loss_fn(x0_hat, ab)
-
-            loss = loss_eps + float(X0_LOSS_WEIGHT) * loss_x0
+            loss_eps = (w * (pred_noise - noise).pow(2)).mean()
+            loss = loss_eps
 
             if epoch == 0 and check:
-                baseline = F.mse_loss(torch.zeros_like(noise), noise).item()
+                baseline = (noise.pow(2)).mean().item()
                 print("noise mean/std:", noise.mean().item(), noise.std().item())
                 print("baseline mse (pred=0):", baseline)
-                print("loss_eps:", loss_eps.item(), "loss_x0:", loss_x0.item(), "loss_total:", loss.item())
+                print("loss_eps (min-snr):", loss_eps.item())
+                print("min-snr weight: mean=", w.mean().item(), "min=", w.min().item(), "max=", w.max().item())
                 check = False
 
             optimizer.zero_grad(set_to_none=True)
@@ -341,24 +322,20 @@ def train_model(
 
             train_loss += loss.item()
             train_eps += loss_eps.item()
-            train_x0 += loss_x0.item()
 
             pbar.set_postfix(
                 loss=f"{loss.item():.4f}",
                 eps=f"{loss_eps.item():.4f}",
-                x0=f"{loss_x0.item():.4f}",
                 lr=f"{optimizer.param_groups[0]['lr']:.2e}",
             )
 
         n_train = max(1, len(train_dl))
         train_loss /= n_train
         train_eps /= n_train
-        train_x0 /= n_train
 
         net_G.eval()
         val_loss = 0.0
         val_eps = 0.0
-        val_x0 = 0.0
 
         with torch.no_grad():
             vbar = tqdm(val_dl, desc="Val", leave=False)
@@ -374,23 +351,22 @@ def train_model(
 
                 pred_noise = net_G(ab_t, L_v, t)
 
-                loss_eps_b = (pred_noise - noise).pow(2).mean()
+                a = alphas_cumprod_train[t]
+                snr = a / (1.0 - a + 1e-8)
+                gamma = float(MIN_SNR_GAMMA)
+                w = torch.minimum(snr, torch.full_like(snr, gamma)) / (snr + 1e-8)
+                w = w.view(-1, 1, 1, 1)
 
-                a = alphas_cumprod_train[t].view(-1, 1, 1, 1)
-                x0_hat = (ab_t - (1.0 - a).sqrt() * pred_noise) / (a.sqrt() + 1e-8)
-                loss_x0_b = x0_loss_fn(x0_hat, ab_v)
-
-                loss_b = loss_eps_b + float(X0_LOSS_WEIGHT) * loss_x0_b
+                loss_eps_b = (w * (pred_noise - noise).pow(2)).mean()
+                loss_b = loss_eps_b
 
                 val_loss += loss_b.item()
                 val_eps += loss_eps_b.item()
-                val_x0 += loss_x0_b.item()
-                vbar.set_postfix(val=f"{loss_b.item():.4f}", eps=f"{loss_eps_b.item():.4f}", x0=f"{loss_x0_b.item():.4f}")
+                vbar.set_postfix(val=f"{loss_b.item():.4f}", eps=f"{loss_eps_b.item():.4f}")
 
         n_val = max(1, len(val_dl))
         val_loss /= n_val
         val_eps /= n_val
-        val_x0 /= n_val
 
         lr_scheduler.step(val_loss)
 
@@ -418,8 +394,6 @@ def train_model(
                 show_tqdm=show_sampling_tqdm,
                 init_ab=fixed_init_ab,
                 dt_percentile=DT_PERCENTILE,
-                dt_apply_every_step=DT_APPLY_EVERY_STEP,
-                dt_last_k_steps=DT_LAST_K_STEPS,
             )
 
             try:
@@ -445,21 +419,17 @@ def train_model(
                 init_ab=None,
                 generator=gen_rand,
                 dt_percentile=DT_PERCENTILE,
-                dt_apply_every_step=DT_APPLY_EVERY_STEP,
-                dt_last_k_steps=DT_LAST_K_STEPS,
             )
 
         stat_ab("real_fix", ab_fix)
-        stat_ab("fake_fix_x0_dt", fake_fix)
+        stat_ab("fake_fix_x0_post", fake_fix)
 
         wandb.log({
             "epoch": epoch + 1,
             "train_loss": train_loss,
             "train_eps": train_eps,
-            "train_x0": train_x0,
             "val_loss": val_loss,
             "val_eps": val_eps,
-            "val_x0": val_x0,
             "lr": optimizer.param_groups[0]['lr'],
 
             "images/fake_fix": log_image_wandb(L_fix, fake_fix),
@@ -470,22 +440,17 @@ def train_model(
             "log_steps_fix": LOG_STEPS_FIX,
             "log_steps_rand": LOG_STEPS_RAND,
 
-            "x0_loss_weight": float(X0_LOSS_WEIGHT),
-            "x0_loss_type": X0_LOSS_TYPE,
-
             "dt_percentile": float(DT_PERCENTILE),
             "dt_clamp_min": float(DT_CLAMP_MIN),
-            "dt_apply_every_step": bool(DT_APPLY_EVERY_STEP),
-            "dt_last_k_steps": int(DT_LAST_K_STEPS),
 
-            "snr_weighting": 0,
+            "min_snr_gamma": float(MIN_SNR_GAMMA),
+            "snr_weighting": 1,
         })
 
         print(
             f"Epoch {epoch+1}/{epochs} | "
             f"train_loss: {train_loss:.6f} | val_loss: {val_loss:.6f} | "
-            f"train_eps: {train_eps:.6f} | train_x0: {train_x0:.6f} | "
-            f"val_eps: {val_eps:.6f} | val_x0: {val_x0:.6f}"
+            f"train_eps: {train_eps:.6f} | val_eps: {val_eps:.6f}"
         )
 
     wandb.finish()
