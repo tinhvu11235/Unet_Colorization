@@ -38,44 +38,58 @@ def create_dataloaders(
     num_workers,
     train_size=None,
     val_size=None,
+    overfit=False,
+    overfit_n=16,
 ):
     train_paths = glob.glob(train_dataset_path + "/*.jpg")
     val_paths = glob.glob(val_dataset_path + "/*.jpg")
 
-    if train_size is None:
-        train_size = len(train_paths)
-    if val_size is None:
-        val_size = len(val_paths)
-
-    if train_size > len(train_paths):
-        raise ValueError(
-            f"train_size ({train_size}) cannot be greater than the number of available training images ({len(train_paths)})"
-        )
-    if val_size > len(val_paths):
-        raise ValueError(
-            f"val_size ({val_size}) cannot be greater than the number of available validation images ({len(val_paths)})"
-        )
+    if len(train_paths) == 0:
+        raise ValueError(f"No .jpg found in train_dataset_path: {train_dataset_path}")
+    if len(val_paths) == 0:
+        raise ValueError(f"No .jpg found in val_dataset_path: {val_dataset_path}")
 
     np.random.seed(123)
-    train_paths = np.random.choice(train_paths, train_size, replace=False)
-    val_paths = np.random.choice(val_paths, val_size, replace=False)
 
-    # Aug nhẹ: giữ hình học đơn giản để L vẫn khớp cấu trúc với ab
-    train_transforms = transforms.Compose(
-        [
+    if overfit:
+        overfit_n = min(int(overfit_n), len(train_paths))
+        train_paths = np.array(train_paths)[:overfit_n]
+        val_paths = train_paths
+
+        train_transforms = transforms.Compose([
+            transforms.Resize((256, 256), Image.BICUBIC),
+            transforms.ToTensor(),
+        ])
+        val_transforms = train_transforms
+    else:
+        if train_size is None:
+            train_size = len(train_paths)
+        if val_size is None:
+            val_size = len(val_paths)
+
+        if train_size > len(train_paths):
+            raise ValueError(
+                f"train_size ({train_size}) cannot be greater than the number of available training images ({len(train_paths)})"
+            )
+        if val_size > len(val_paths):
+            raise ValueError(
+                f"val_size ({val_size}) cannot be greater than the number of available validation images ({len(val_paths)})"
+            )
+
+        train_paths = np.random.choice(train_paths, train_size, replace=False)
+        val_paths = np.random.choice(val_paths, val_size, replace=False)
+
+        train_transforms = transforms.Compose([
             transforms.Resize((286, 286), Image.BICUBIC),
             transforms.RandomCrop((256, 256)),
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.ToTensor(),
-        ]
-    )
+        ])
 
-    val_transforms = transforms.Compose(
-        [
+        val_transforms = transforms.Compose([
             transforms.Resize((256, 256), Image.BICUBIC),
             transforms.ToTensor(),
-        ]
-    )
+        ])
 
     train_dl = DataLoader(
         ColorizationDataset(train_paths, transform=train_transforms),
@@ -93,3 +107,4 @@ def create_dataloaders(
     )
 
     return train_dl, val_dl
+
