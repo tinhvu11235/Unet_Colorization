@@ -1,4 +1,5 @@
 import glob
+import os
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -10,7 +11,7 @@ from skimage.color import rgb2lab
 class ColorizationDataset(Dataset):
     def __init__(self, paths, transform=None):
         self.transform = transform
-        self.paths = paths
+        self.paths = sorted(list(paths))
 
     def __getitem__(self, idx):
         img = Image.open(self.paths[idx]).convert("RGB")
@@ -41,8 +42,8 @@ def create_dataloaders(
     overfit=False,
     overfit_n=16,
 ):
-    train_paths = glob.glob(train_dataset_path + "/*.jpg")
-    val_paths = glob.glob(val_dataset_path + "/*.jpg")
+    train_paths = sorted(glob.glob(os.path.join(train_dataset_path, "*.jpg")))
+    val_paths = sorted(glob.glob(os.path.join(val_dataset_path, "*.jpg")))
 
     if len(train_paths) == 0:
         raise ValueError(f"No .jpg found in train_dataset_path: {train_dataset_path}")
@@ -53,7 +54,7 @@ def create_dataloaders(
 
     if overfit:
         overfit_n = min(int(overfit_n), len(train_paths))
-        train_paths = np.array(train_paths)[:overfit_n]
+        train_paths = train_paths[:overfit_n]
         val_paths = train_paths
 
         train_transforms = transforms.Compose([
@@ -67,17 +68,11 @@ def create_dataloaders(
         if val_size is None:
             val_size = len(val_paths)
 
-        if train_size > len(train_paths):
-            raise ValueError(
-                f"train_size ({train_size}) cannot be greater than the number of available training images ({len(train_paths)})"
-            )
-        if val_size > len(val_paths):
-            raise ValueError(
-                f"val_size ({val_size}) cannot be greater than the number of available validation images ({len(val_paths)})"
-            )
+        train_size = min(int(train_size), len(train_paths))
+        val_size = min(int(val_size), len(val_paths))
 
-        train_paths = np.random.choice(train_paths, train_size, replace=False)
-        val_paths = np.random.choice(val_paths, val_size, replace=False)
+        train_paths = np.random.choice(train_paths, train_size, replace=False).tolist()
+        val_paths = np.random.choice(val_paths, val_size, replace=False).tolist()
 
         train_transforms = transforms.Compose([
             transforms.Resize((286, 286), Image.BICUBIC),
@@ -107,4 +102,3 @@ def create_dataloaders(
     )
 
     return train_dl, val_dl
-
