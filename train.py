@@ -21,9 +21,6 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 config = {}
 
-LOG_STEPS_FIX = 1000
-LOG_STEPS_RAND = 1000
-
 MIN_SNR_GAMMA = 5.0
 
 DT_PERCENTILE = 0.995
@@ -220,7 +217,7 @@ def train_model(
     lr,
     checkpoint_path=None,
     save_dir="/kaggle/working/checkpoints",
-    inference_steps=50,
+    inference_steps=200,
     show_sampling_tqdm=False,
 ):
     ensure_dir(save_dir)
@@ -390,7 +387,7 @@ def train_model(
                 net_G,
                 L_fix,
                 infer_noise_scheduler,
-                num_steps=LOG_STEPS_FIX,
+                num_steps=int(inference_steps),
                 show_tqdm=show_sampling_tqdm,
                 init_ab=fixed_init_ab,
                 dt_percentile=DT_PERCENTILE,
@@ -414,7 +411,7 @@ def train_model(
                 net_G,
                 L_r,
                 infer_noise_scheduler,
-                num_steps=LOG_STEPS_RAND,
+                num_steps=int(inference_steps),
                 show_tqdm=show_sampling_tqdm,
                 init_ab=None,
                 generator=gen_rand,
@@ -431,18 +428,13 @@ def train_model(
             "val_loss": val_loss,
             "val_eps": val_eps,
             "lr": optimizer.param_groups[0]['lr'],
-
             "images/fake_fix": log_image_wandb(L_fix, fake_fix),
             "images/real_fix": log_image_wandb(L_fix, ab_fix),
             "images/fake_rand": log_image_wandb(L_r, fake_rand),
             "images/real_rand": log_image_wandb(L_r, ab_r),
-
-            "log_steps_fix": LOG_STEPS_FIX,
-            "log_steps_rand": LOG_STEPS_RAND,
-
+            "inference_steps": int(inference_steps),
             "dt_percentile": float(DT_PERCENTILE),
             "dt_clamp_min": float(DT_CLAMP_MIN),
-
             "min_snr_gamma": float(MIN_SNR_GAMMA),
             "snr_weighting": 1,
         })
@@ -460,13 +452,22 @@ def train_from_scratch(cfg):
     global config
     config = cfg
 
+    train_size = cfg.get("TRAIN_SIZE", None)
+    val_size = cfg.get("VAL_SIZE", None)
+    if train_size is None:
+        train_size = 1000
+    if val_size is None:
+        val_size = min(200, int(train_size))
+
     train_dl, val_dl = create_dataloaders(
         cfg["TRAIN_DATASET_PATH"],
         cfg["VAL_DATASET_PATH"],
         cfg["BATCH_SIZE"],
         cfg["NUM_WORKERS"],
-        cfg["TRAIN_SIZE"],
-        cfg["VAL_SIZE"],
+        train_size=train_size,
+        val_size=val_size,
+        overfit=bool(cfg.get("OVERFIT", False)),
+        overfit_n=int(cfg.get("OVERFIT_N", 16)),
     )
 
     net_G = build_model().to(DEVICE)
@@ -478,7 +479,7 @@ def train_from_scratch(cfg):
         epochs=cfg["EPOCHS"],
         lr=cfg["LR"],
         save_dir=cfg["CHECKPOINT_DIR"],
-        inference_steps=cfg.get("INFERENCE_STEPS", 50),
+        inference_steps=cfg.get("INFERENCE_STEPS", 200),
         show_sampling_tqdm=cfg.get("SHOW_SAMPLING_TQDM", False),
     )
 
@@ -487,13 +488,22 @@ def continue_training(cfg, checkpoint_path):
     global config
     config = cfg
 
+    train_size = cfg.get("TRAIN_SIZE", None)
+    val_size = cfg.get("VAL_SIZE", None)
+    if train_size is None:
+        train_size = 1000
+    if val_size is None:
+        val_size = min(200, int(train_size))
+
     train_dl, val_dl = create_dataloaders(
         cfg["TRAIN_DATASET_PATH"],
         cfg["VAL_DATASET_PATH"],
         cfg["BATCH_SIZE"],
         cfg["NUM_WORKERS"],
-        cfg["TRAIN_SIZE"],
-        cfg["VAL_SIZE"],
+        train_size=train_size,
+        val_size=val_size,
+        overfit=bool(cfg.get("OVERFIT", False)),
+        overfit_n=int(cfg.get("OVERFIT_N", 16)),
     )
 
     net_G = build_model().to(DEVICE)
@@ -506,6 +516,6 @@ def continue_training(cfg, checkpoint_path):
         lr=cfg["LR"],
         checkpoint_path=checkpoint_path,
         save_dir=cfg["CHECKPOINT_DIR"],
-        inference_steps=cfg.get("INFERENCE_STEPS", 50),
+        inference_steps=cfg.get("INFERENCE_STEPS", 200),
         show_sampling_tqdm=cfg.get("SHOW_SAMPLING_TQDM", False),
     )
