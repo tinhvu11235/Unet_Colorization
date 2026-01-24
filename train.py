@@ -21,17 +21,33 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 config = {}
 
+NUM_TRAIN_TIMESTEPS = 300
+
+USE_MIN_SNR = False
 MIN_SNR_GAMMA = 5.0
 
 DT_PERCENTILE = 0.995
 DT_CLAMP_MIN = 1.0
+DT_IN_LOOP = True
+DT_LAST_K = 50
+
+T_CURRICULUM = True
+T_WARMUP_EPOCHS = 5
+T_MIN_START = 60
+
+LOG_EVERY_STEPS = 50
+
+SAMPLE_EVERY_EPOCHS = 1
+SAMPLE_N_VIS = 2
 
 
 def lab_to_rgb(L, ab):
     L = (L + 1.0) * 50.0
     ab = ab * 110.0
     Lab = np.concatenate([L, ab], axis=0).transpose(1, 2, 0)
-    return lab2rgb(Lab)
+    rgb = lab2rgb(Lab)
+    rgb = np.clip(rgb, 0.0, 1.0)
+    return rgb
 
 
 def ensure_dir(path):
@@ -50,7 +66,7 @@ def _is_url(s: str) -> bool:
         return False
 
 
-def _extract_gdrive_file_id(url: str) -> str | None:
+def _extract_gdrive_file_id(url: str):
     m = re.search(r"/file/d/([a-zA-Z0-9_-]+)", url)
     if m:
         return m.group(1)
@@ -64,7 +80,6 @@ def _download_gdrive(url: str, out_path: str) -> str:
     file_id = _extract_gdrive_file_id(url)
     if file_id is None:
         raise ValueError("Không trích được file id từ link Google Drive.")
-
     try:
         import gdown  # type: ignore
         gdown.download(id=file_id, output=out_path, quiet=False, fuzzy=True)
@@ -75,34 +90,27 @@ def _download_gdrive(url: str, out_path: str) -> str:
         direct = f"https://drive.google.com/uc?export=download&id={file_id}"
         urllib.request.urlretrieve(direct, out_path)
         if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
-            raise RuntimeError(
-                "Tải bằng direct link thất bại. Cài gdown (pip install gdown) rồi thử lại."
-            )
+            raise RuntimeError("Tải bằng direct link thất bại.")
         return out_path
 
 
-def resolve_checkpoint_path(checkpoint_path: str | None, cache_dir: str) -> str | None:
+def resolve_checkpoint_path(checkpoint_path, cache_dir):
     if not checkpoint_path:
         return None
-
     if os.path.exists(checkpoint_path):
         return checkpoint_path
-
     if _is_url(checkpoint_path):
         ensure_dir(cache_dir)
         basename = os.path.basename(urllib.parse.urlparse(checkpoint_path).path).strip()
         if not basename or "." not in basename:
             basename = "checkpoint_download.pth"
         local_path = os.path.join(cache_dir, basename)
-
         if "drive.google.com" in checkpoint_path:
             return _download_gdrive(checkpoint_path, local_path)
-
         urllib.request.urlretrieve(checkpoint_path, local_path)
         if not os.path.exists(local_path) or os.path.getsize(local_path) == 0:
             raise RuntimeError("Download checkpoint từ URL thất bại.")
         return local_path
-
     raise FileNotFoundError(f"Không tìm thấy checkpoint_path: {checkpoint_path}")
 
 
@@ -125,7 +133,7 @@ def save_checkpoint_local(epoch_next, model, optimizer, scheduler, run_id, save_
     return ckpt_path
 
 
-def log_image_wandb(L, ab, num=5, captions=None):
+def log_image_wandb(L, ab, num=2, captions=None):
     L = L.detach().cpu().numpy()
     ab = ab.detach().cpu().numpy()
     B = min(L.shape[0], num)
@@ -137,13 +145,6 @@ def log_image_wandb(L, ab, num=5, captions=None):
     return images
 
 
-def stat_ab(name: str, ab: torch.Tensor):
-    m = ab.mean(dim=[0, 2, 3]).detach().cpu().numpy()
-    s = ab.std(dim=[0, 2, 3]).detach().cpu().numpy()
-    mx = ab.abs().max().item()
-    print(f"{name}: mean={m}, std={s}, |max|={mx:.3f}")
-
-
 def _right_pad_dims_to(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
     while t.ndim < x.ndim:
         t = t.view(t.shape[0], *([1] * (x.ndim - 1)))
@@ -151,14 +152,37 @@ def _right_pad_dims_to(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
-def dynamic_threshold(img: torch.Tensor, percentile: float = 0.995, clamp_min: float = 1.0) -> torch.Tensor:
+def dynamic_threshold(img: torch.Tensor, percentile: float = 0.995, clamp_min: float = 1.0):
     B = img.shape[0]
     flat = img.abs().reshape(B, -1)
     s = torch.quantile(flat, percentile, dim=1)
     s = torch.clamp(s, min=clamp_min)
     s = _right_pad_dims_to(img, s)
     img = img.clamp(-s, s) / s
-    return img
+    return img, s
+
+
+def tensor_stats(x: torch.Tensor, prefix: str):
+    x = x.detach()
+    flat = x.reshape(x.shape[0], -1)
+    absflat = flat.abs()
+    p95 = torch.quantile(absflat, 0.95, dim=1).mean()
+    p995 = torch.quantile(absflat, 0.995, dim=1).mean()
+    out1 = (absflat > 1.0).float().mean()
+    out15 = (absflat > 1.5).float().mean()
+    out2 = (absflat > 2.0).float().mean()
+    s_std = x.std(dim=[2, 3]).mean()
+    return {
+        f"{prefix}/mean": x.mean().item(),
+        f"{prefix}/std": x.std().item(),
+        f"{prefix}/absmax": x.abs().max().item(),
+        f"{prefix}/abs_p95": p95.item(),
+        f"{prefix}/abs_p995": p995.item(),
+        f"{prefix}/frac_abs_gt_1": out1.item(),
+        f"{prefix}/frac_abs_gt_1p5": out15.item(),
+        f"{prefix}/frac_abs_gt_2": out2.item(),
+        f"{prefix}/spatial_std_mean": s_std.item(),
+    }
 
 
 @torch.no_grad()
@@ -189,9 +213,12 @@ def sample_colorization(
         iterator = tqdm(iterator, desc="Sampling", leave=False)
 
     timesteps_list = list(iterator)
+    nT = len(timesteps_list)
 
     x0_hat = None
-    for t in timesteps_list:
+    dt_s_last = None
+
+    for i, t in enumerate(timesteps_list):
         t_int = int(t)
         t_batch = torch.full((B,), t_int, device=L.device, dtype=torch.long)
 
@@ -201,12 +228,24 @@ def sample_colorization(
         a = alphas_cumprod[t_int].view(1, 1, 1, 1)
         x0_hat = (ab - (1.0 - a).sqrt() * eps_hat) / (a.sqrt() + 1e-8)
 
+        if DT_IN_LOOP and (dt_percentile is not None):
+            if i >= max(0, nT - int(DT_LAST_K)):
+                x0_hat, dt_s_last = dynamic_threshold(x0_hat, percentile=float(dt_percentile), clamp_min=float(DT_CLAMP_MIN))
+                eps_hat = (ab - a.sqrt() * x0_hat) / ((1.0 - a).sqrt() + 1e-8)
+
         ab = scheduler.step(eps_hat, t_int, ab).prev_sample
 
-    if (dt_percentile is not None) and (x0_hat is not None):
-        x0_hat = dynamic_threshold(x0_hat, percentile=float(dt_percentile), clamp_min=float(DT_CLAMP_MIN))
+    return x0_hat, dt_s_last
 
-    return x0_hat
+
+def pick_timesteps(B: int, epoch: int, device, num_train_timesteps: int):
+    if not T_CURRICULUM:
+        return torch.randint(0, num_train_timesteps, (B,), device=device).long()
+    warm = max(1, int(T_WARMUP_EPOCHS))
+    frac = min(1.0, float(epoch + 1) / float(warm))
+    t_max = int(T_MIN_START + frac * (num_train_timesteps - T_MIN_START))
+    t_max = max(1, min(num_train_timesteps, t_max))
+    return torch.randint(0, t_max, (B,), device=device).long()
 
 
 def train_model(
@@ -217,7 +256,7 @@ def train_model(
     lr,
     checkpoint_path=None,
     save_dir="/kaggle/working/checkpoints",
-    inference_steps=200,
+    inference_steps=50,
     show_sampling_tqdm=False,
 ):
     ensure_dir(save_dir)
@@ -228,13 +267,13 @@ def train_model(
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.95, patience=5)
 
     train_noise_scheduler = DDPMScheduler(
-        num_train_timesteps=1000,
+        num_train_timesteps=NUM_TRAIN_TIMESTEPS,
         beta_schedule="squaredcos_cap_v2",
         prediction_type="epsilon",
     )
 
     infer_noise_scheduler = DDPMScheduler(
-        num_train_timesteps=1000,
+        num_train_timesteps=NUM_TRAIN_TIMESTEPS,
         beta_schedule="squaredcos_cap_v2",
         prediction_type="epsilon",
         clip_sample=False,
@@ -261,20 +300,17 @@ def train_model(
         wandb.init(project=config["WANDB_PROJECT"], name=config["WANDB_RUN_NAME"], config={"lr": lr, "epochs": epochs})
         run_id = wandb.run.id
 
-    fixed_batch = next(iter(val_dl))
+    fixed_batch = next(iter(train_dl))
     L_fix_all = fixed_batch["L"].to(DEVICE)
     ab_fix_all = fixed_batch["ab"].to(DEVICE)
 
-    n_vis_fix = min(5, L_fix_all.size(0))
-    L_fix = L_fix_all[:n_vis_fix]
-    ab_fix = ab_fix_all[:n_vis_fix]
+    n_vis = min(int(SAMPLE_N_VIS), L_fix_all.size(0))
+    L_fix = L_fix_all[:n_vis]
+    ab_fix = ab_fix_all[:n_vis]
 
     gen_fix = torch.Generator(device=DEVICE).manual_seed(1234)
     fixed_init_ab = torch.randn(ab_fix.shape, device=ab_fix.device, dtype=ab_fix.dtype, generator=gen_fix)
     fixed_init_ab = fixed_init_ab * infer_noise_scheduler.init_noise_sigma
-
-    val_iter = iter(val_dl)
-    check = True
 
     alphas_cumprod_train = train_noise_scheduler.alphas_cumprod.to(DEVICE)
 
@@ -284,34 +320,29 @@ def train_model(
         train_eps = 0.0
 
         pbar = tqdm(train_dl, desc=f"Train {epoch+1}/{epochs}", leave=False)
-        for data in pbar:
+        for step, data in enumerate(pbar):
             L = data["L"].to(DEVICE, non_blocking=True)
             ab = data["ab"].to(DEVICE, non_blocking=True)
 
             B = ab.size(0)
-            t = torch.randint(0, train_noise_scheduler.num_train_timesteps, (B,), device=DEVICE).long()
+            t = pick_timesteps(B, epoch, DEVICE, NUM_TRAIN_TIMESTEPS)
 
             noise = torch.randn_like(ab)
             ab_t = train_noise_scheduler.add_noise(ab, noise, t)
 
             pred_noise = net_G(ab_t, L, t)
 
-            a = alphas_cumprod_train[t]
-            snr = a / (1.0 - a + 1e-8)
-            gamma = float(MIN_SNR_GAMMA)
-            w = torch.minimum(snr, torch.full_like(snr, gamma)) / (snr + 1e-8)
-            w = w.view(-1, 1, 1, 1)
+            if USE_MIN_SNR:
+                a = alphas_cumprod_train[t]
+                snr = a / (1.0 - a + 1e-8)
+                gamma = float(MIN_SNR_GAMMA)
+                w = torch.minimum(snr, torch.full_like(snr, gamma)) / (snr + 1e-8)
+                w = w.view(-1, 1, 1, 1)
+                loss_eps = (w * (pred_noise - noise).pow(2)).mean()
+            else:
+                loss_eps = (pred_noise - noise).pow(2).mean()
 
-            loss_eps = (w * (pred_noise - noise).pow(2)).mean()
             loss = loss_eps
-
-            if epoch == 0 and check:
-                baseline = (noise.pow(2)).mean().item()
-                print("noise mean/std:", noise.mean().item(), noise.std().item())
-                print("baseline mse (pred=0):", baseline)
-                print("loss_eps (min-snr):", loss_eps.item())
-                print("min-snr weight: mean=", w.mean().item(), "min=", w.min().item(), "max=", w.max().item())
-                check = False
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -325,6 +356,22 @@ def train_model(
                 eps=f"{loss_eps.item():.4f}",
                 lr=f"{optimizer.param_groups[0]['lr']:.2e}",
             )
+
+            if (step % int(LOG_EVERY_STEPS) == 0) or (epoch == start_epoch and step < 3):
+                with torch.no_grad():
+                    a = alphas_cumprod_train[t].view(-1, 1, 1, 1)
+                    x0_hat = (ab_t - (1.0 - a).sqrt() * pred_noise) / (a.sqrt() + 1e-8)
+
+                    logd = {}
+                    logd.update(tensor_stats(ab, "train/ab"))
+                    logd.update(tensor_stats(ab_t, "train/ab_t"))
+                    logd.update(tensor_stats(noise, "train/noise"))
+                    logd.update(tensor_stats(pred_noise, "train/pred_noise"))
+                    logd.update(tensor_stats(x0_hat, "train/x0_hat_from_eps"))
+                    logd["train/t_mean"] = t.float().mean().item()
+                    logd["train/t_min"] = t.min().item()
+                    logd["train/t_max"] = t.max().item()
+                    wandb.log(logd)
 
         n_train = max(1, len(train_dl))
         train_loss /= n_train
@@ -341,25 +388,25 @@ def train_model(
                 ab_v = val["ab"].to(DEVICE, non_blocking=True)
 
                 B = ab_v.size(0)
-                t = torch.randint(0, train_noise_scheduler.num_train_timesteps, (B,), device=DEVICE).long()
+                t = torch.randint(0, NUM_TRAIN_TIMESTEPS, (B,), device=DEVICE).long()
 
                 noise = torch.randn_like(ab_v)
                 ab_t = train_noise_scheduler.add_noise(ab_v, noise, t)
-
                 pred_noise = net_G(ab_t, L_v, t)
 
-                a = alphas_cumprod_train[t]
-                snr = a / (1.0 - a + 1e-8)
-                gamma = float(MIN_SNR_GAMMA)
-                w = torch.minimum(snr, torch.full_like(snr, gamma)) / (snr + 1e-8)
-                w = w.view(-1, 1, 1, 1)
+                if USE_MIN_SNR:
+                    a = alphas_cumprod_train[t]
+                    snr = a / (1.0 - a + 1e-8)
+                    gamma = float(MIN_SNR_GAMMA)
+                    w = torch.minimum(snr, torch.full_like(snr, gamma)) / (snr + 1e-8)
+                    w = w.view(-1, 1, 1, 1)
+                    loss_eps_b = (w * (pred_noise - noise).pow(2)).mean()
+                else:
+                    loss_eps_b = (pred_noise - noise).pow(2).mean()
 
-                loss_eps_b = (w * (pred_noise - noise).pow(2)).mean()
-                loss_b = loss_eps_b
-
-                val_loss += loss_b.item()
+                val_loss += loss_eps_b.item()
                 val_eps += loss_eps_b.item()
-                vbar.set_postfix(val=f"{loss_b.item():.4f}", eps=f"{loss_eps_b.item():.4f}")
+                vbar.set_postfix(val=f"{loss_eps_b.item():.4f}")
 
         n_val = max(1, len(val_dl))
         val_loss /= n_val
@@ -382,62 +429,46 @@ def train_model(
             is_best=is_best,
         )
 
-        with torch.no_grad():
-            fake_fix = sample_colorization(
-                net_G,
-                L_fix,
-                infer_noise_scheduler,
-                num_steps=int(inference_steps),
-                show_tqdm=show_sampling_tqdm,
-                init_ab=fixed_init_ab,
-                dt_percentile=DT_PERCENTILE,
-            )
+        if ((epoch + 1) % int(SAMPLE_EVERY_EPOCHS) == 0):
+            with torch.no_grad():
+                x0_fix, dt_s = sample_colorization(
+                    net_G,
+                    L_fix,
+                    infer_noise_scheduler,
+                    num_steps=int(inference_steps),
+                    show_tqdm=show_sampling_tqdm,
+                    init_ab=fixed_init_ab,
+                    dt_percentile=DT_PERCENTILE,
+                )
 
-            try:
-                data_rand = next(val_iter)
-            except StopIteration:
-                val_iter = iter(val_dl)
-                data_rand = next(val_iter)
+                logd2 = {}
+                logd2.update(tensor_stats(ab_fix, "vis/real_ab_fix"))
+                logd2.update(tensor_stats(x0_fix, "vis/fake_x0_fix"))
+                if dt_s is not None:
+                    logd2.update(tensor_stats(dt_s, "vis/dt_s"))
+                wandb.log(logd2)
 
-            L_r_all = data_rand["L"].to(DEVICE)
-            ab_r_all = data_rand["ab"].to(DEVICE)
-
-            n_vis_r = min(5, L_r_all.size(0))
-            L_r = L_r_all[:n_vis_r]
-            ab_r = ab_r_all[:n_vis_r]
-
-            gen_rand = torch.Generator(device=DEVICE).manual_seed(999 + epoch)
-            fake_rand = sample_colorization(
-                net_G,
-                L_r,
-                infer_noise_scheduler,
-                num_steps=int(inference_steps),
-                show_tqdm=show_sampling_tqdm,
-                init_ab=None,
-                generator=gen_rand,
-                dt_percentile=DT_PERCENTILE,
-            )
-
-        stat_ab("real_fix", ab_fix)
-        stat_ab("fake_fix_x0_post", fake_fix)
-
-        wandb.log({
-            "epoch": epoch + 1,
-            "train_loss": train_loss,
-            "train_eps": train_eps,
-            "val_loss": val_loss,
-            "val_eps": val_eps,
-            "lr": optimizer.param_groups[0]['lr'],
-            "images/fake_fix": log_image_wandb(L_fix, fake_fix),
-            "images/real_fix": log_image_wandb(L_fix, ab_fix),
-            "images/fake_rand": log_image_wandb(L_r, fake_rand),
-            "images/real_rand": log_image_wandb(L_r, ab_r),
-            "inference_steps": int(inference_steps),
-            "dt_percentile": float(DT_PERCENTILE),
-            "dt_clamp_min": float(DT_CLAMP_MIN),
-            "min_snr_gamma": float(MIN_SNR_GAMMA),
-            "snr_weighting": 1,
-        })
+                wandb.log({
+                    "epoch": epoch + 1,
+                    "train_loss": train_loss,
+                    "train_eps": train_eps,
+                    "val_loss": val_loss,
+                    "val_eps": val_eps,
+                    "lr": optimizer.param_groups[0]['lr'],
+                    "images/fake_fix": log_image_wandb(L_fix, x0_fix, num=n_vis),
+                    "images/real_fix": log_image_wandb(L_fix, ab_fix, num=n_vis),
+                    "num_train_timesteps": int(NUM_TRAIN_TIMESTEPS),
+                    "inference_steps": int(inference_steps),
+                    "use_min_snr": int(USE_MIN_SNR),
+                    "min_snr_gamma": float(MIN_SNR_GAMMA),
+                    "dt_percentile": float(DT_PERCENTILE),
+                    "dt_clamp_min": float(DT_CLAMP_MIN),
+                    "dt_in_loop": int(DT_IN_LOOP),
+                    "dt_last_k": int(DT_LAST_K),
+                    "t_curriculum": int(T_CURRICULUM),
+                    "t_warmup_epochs": int(T_WARMUP_EPOCHS),
+                    "t_min_start": int(T_MIN_START),
+                })
 
         print(
             f"Epoch {epoch+1}/{epochs} | "
@@ -454,10 +485,6 @@ def train_from_scratch(cfg):
 
     train_size = cfg.get("TRAIN_SIZE", None)
     val_size = cfg.get("VAL_SIZE", None)
-    if train_size is None:
-        train_size = 1000
-    if val_size is None:
-        val_size = min(200, int(train_size))
 
     train_dl, val_dl = create_dataloaders(
         cfg["TRAIN_DATASET_PATH"],
@@ -468,6 +495,7 @@ def train_from_scratch(cfg):
         val_size=val_size,
         overfit=bool(cfg.get("OVERFIT", False)),
         overfit_n=int(cfg.get("OVERFIT_N", 16)),
+        seed=int(cfg.get("SEED", 123)),
     )
 
     net_G = build_model().to(DEVICE)
@@ -476,11 +504,11 @@ def train_from_scratch(cfg):
         net_G,
         train_dl,
         val_dl,
-        epochs=cfg["EPOCHS"],
-        lr=cfg["LR"],
+        epochs=int(cfg["EPOCHS"]),
+        lr=float(cfg["LR"]),
         save_dir=cfg["CHECKPOINT_DIR"],
-        inference_steps=cfg.get("INFERENCE_STEPS", 200),
-        show_sampling_tqdm=cfg.get("SHOW_SAMPLING_TQDM", False),
+        inference_steps=int(cfg.get("INFERENCE_STEPS", 50)),
+        show_sampling_tqdm=bool(cfg.get("SHOW_SAMPLING_TQDM", False)),
     )
 
 
@@ -490,10 +518,6 @@ def continue_training(cfg, checkpoint_path):
 
     train_size = cfg.get("TRAIN_SIZE", None)
     val_size = cfg.get("VAL_SIZE", None)
-    if train_size is None:
-        train_size = 1000
-    if val_size is None:
-        val_size = min(200, int(train_size))
 
     train_dl, val_dl = create_dataloaders(
         cfg["TRAIN_DATASET_PATH"],
@@ -504,6 +528,7 @@ def continue_training(cfg, checkpoint_path):
         val_size=val_size,
         overfit=bool(cfg.get("OVERFIT", False)),
         overfit_n=int(cfg.get("OVERFIT_N", 16)),
+        seed=int(cfg.get("SEED", 123)),
     )
 
     net_G = build_model().to(DEVICE)
@@ -512,10 +537,10 @@ def continue_training(cfg, checkpoint_path):
         net_G,
         train_dl,
         val_dl,
-        epochs=cfg["EPOCHS"],
-        lr=cfg["LR"],
+        epochs=int(cfg["EPOCHS"]),
+        lr=float(cfg["LR"]),
         checkpoint_path=checkpoint_path,
         save_dir=cfg["CHECKPOINT_DIR"],
-        inference_steps=cfg.get("INFERENCE_STEPS", 200),
-        show_sampling_tqdm=cfg.get("SHOW_SAMPLING_TQDM", False),
+        inference_steps=int(cfg.get("INFERENCE_STEPS", 50)),
+        show_sampling_tqdm=bool(cfg.get("SHOW_SAMPLING_TQDM", False)),
     )
