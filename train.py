@@ -495,7 +495,6 @@ def train_from_scratch(cfg):
         val_size=val_size,
         overfit=bool(cfg.get("OVERFIT", False)),
         overfit_n=int(cfg.get("OVERFIT_N", 16)),
-        seed=int(cfg.get("SEED", 123)),
     )
 
     net_G = build_model().to(DEVICE)
@@ -528,7 +527,6 @@ def continue_training(cfg, checkpoint_path):
         val_size=val_size,
         overfit=bool(cfg.get("OVERFIT", False)),
         overfit_n=int(cfg.get("OVERFIT_N", 16)),
-        seed=int(cfg.get("SEED", 123)),
     )
 
     net_G = build_model().to(DEVICE)
