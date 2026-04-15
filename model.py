@@ -175,7 +175,7 @@ class GAN(nn.Module):
         use_segmentation=False,
         num_seg_classes=182,
         seg_ignore_index=255,
-        lambda_seg=10.0,
+        lambda_seg=0.01,
     ):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
