@@ -36,7 +36,7 @@ def save_checkpoint_as_artifact(epoch, model, run_id, artifact_base_name="checkp
     artifact = wandb.Artifact(name=artifact_name, type='model')
     artifact.add_file(checkpoint_file)
     wandb.log_artifact(artifact)
-    os.remove(checkpoint_file)
+   
 
 
 def log_image_wandb(L, ab, num=5, captions=None):
