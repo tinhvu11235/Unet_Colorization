@@ -36,7 +36,7 @@ def save_checkpoint_as_artifact(epoch, model, run_id, artifact_base_name="checkp
     artifact = wandb.Artifact(name=artifact_name, type='model')
     artifact.add_file(checkpoint_file)
     wandb.log_artifact(artifact)
-    os.remove(checkpoint_file)
+
 
 
 def log_image_wandb(L, ab, num=5, captions=None):
@@ -78,6 +78,20 @@ def evaluate_seg_on_val(GAN_model, val_dl):
     return total_seg / len(val_dl)
 
 
+def evaluate_obj_on_val(GAN_model, val_dl):
+    if getattr(GAN_model, 'lambda_obj', 0.0) <= 0:
+        return 0.0
+
+    GAN_model.net_G.eval()
+    total_obj = 0.0
+    with torch.no_grad():
+        for data in val_dl:
+            GAN_model.setup_input(data)
+            GAN_model.forward()
+            total_obj += GAN_model._compute_object_recon_loss().item()
+    return total_obj / len(val_dl)
+
+
 def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, warmup_epochs=2):
     epochs = cfg["EPOCHS"]
     start_epoch = 0
@@ -108,6 +122,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
         running_loss_G_GAN = 0.0
         running_loss_G_L1 = 0.0
         running_loss_G_SEG = 0.0
+        running_loss_G_OBJ = 0.0
         running_loss_D_fake = 0.0
         running_loss_D_real = 0.0
         step = 0
@@ -141,6 +156,7 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
             running_loss_G_GAN += GAN_model.loss_G_GAN.item()
             running_loss_G_L1 += GAN_model.loss_G_L1.item()
             running_loss_G_SEG += GAN_model.loss_G_SEG.item() if hasattr(GAN_model, 'loss_G_SEG') else 0.0
+            running_loss_G_OBJ += GAN_model.loss_G_OBJ.item() if hasattr(GAN_model, 'loss_G_OBJ') else 0.0
             running_loss_D_fake += GAN_model.loss_D_fake.item()
             running_loss_D_real += GAN_model.loss_D_real.item()
             step += 1
@@ -165,12 +181,14 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
         average_loss_G_GAN = running_loss_G_GAN / num_batches
         average_loss_G_L1 = running_loss_G_L1 / num_batches
         average_loss_G_SEG = running_loss_G_SEG / num_batches
+        average_loss_G_OBJ = running_loss_G_OBJ / num_batches
         average_loss_D_fake = running_loss_D_fake / num_batches
         average_loss_D_real = running_loss_D_real / num_batches
 
         GAN_model.scheduler_G.step(average_loss_G)
         val_L1 = evaluate_L1_on_val(GAN_model, val_dl)
         val_seg = evaluate_seg_on_val(GAN_model, val_dl)
+        val_obj = evaluate_obj_on_val(GAN_model, val_dl)
 
         with torch.no_grad():
             data_fix = next(iter(val_dl))
@@ -194,12 +212,16 @@ def train_GAN(GAN_model, train_dl, val_dl, log_interval, checkpoint_path=None, w
         if GAN_model.use_segmentation:
             log_payload["epoch_train_loss_G_SEG"] = average_loss_G_SEG
             log_payload["epoch_val_loss_G_SEG"] = val_seg
+        if getattr(GAN_model, 'lambda_obj', 0.0) > 0:
+            log_payload["epoch_train_loss_G_OBJ"] = average_loss_G_OBJ
+            log_payload["epoch_val_loss_G_OBJ"] = val_obj
 
         wandb.log(log_payload)
         if GAN_model.use_segmentation:
             print(
                 f"Epoch {epoch + 1}/{epochs} — train L1: {average_loss_G_L1:.4f}, "
-                f"train seg: {average_loss_G_SEG:.4f}, val L1: {val_L1:.4f}, val seg: {val_seg:.4f}"
+                f"train seg: {average_loss_G_SEG:.4f}, train obj: {average_loss_G_OBJ:.4f}, "
+                f"val L1: {val_L1:.4f}, val seg: {val_seg:.4f}, val obj: {val_obj:.4f}"
             )
         else:
             print(f"Epoch {epoch + 1}/{epochs} — train L1: {average_loss_G_L1:.4f}, val L1: {val_L1:.4f}")
@@ -246,6 +268,9 @@ def train_from_scratch():
         num_seg_classes=cfg["NUM_SEG_CLASSES"],
         seg_ignore_index=cfg["SEG_IGNORE_INDEX"],
         lambda_seg=cfg["LAMBDA_SEG"],
+        lambda_obj=cfg.get("LAMBDA_OBJ", 0.0),
+        object_min_pixels=cfg.get("OBJECT_MIN_PIXELS", 16),
+        object_use_connected_components=cfg.get("OBJECT_USE_CONNECTED_COMPONENTS", True),
     )
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"])
 
@@ -278,5 +303,8 @@ def train_from_checkpoint(path):
         num_seg_classes=cfg["NUM_SEG_CLASSES"],
         seg_ignore_index=cfg["SEG_IGNORE_INDEX"],
         lambda_seg=cfg["LAMBDA_SEG"],
+        lambda_obj=cfg.get("LAMBDA_OBJ", 0.0),
+        object_min_pixels=cfg.get("OBJECT_MIN_PIXELS", 16),
+        object_use_connected_components=cfg.get("OBJECT_USE_CONNECTED_COMPONENTS", True),
     )
     train_GAN(net_GAN, train_dl, val_dl, log_interval=cfg["LOG_INTERVAL"], checkpoint_path=checkpoint_file)

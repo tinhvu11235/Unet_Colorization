@@ -1,3 +1,5 @@
+import cv2
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -99,6 +101,7 @@ def get_encoder_weights(model_path='model.pth'):
     return encoder_state_dict
 
 
+
 def load_trained_model(model_path='model.pth'):
     checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
     model = UNetGenerator()
@@ -175,7 +178,10 @@ class GAN(nn.Module):
         use_segmentation=False,
         num_seg_classes=182,
         seg_ignore_index=255,
-        lambda_seg=1.0,
+        lambda_seg=0.01,
+        lambda_obj=0.01,
+        object_min_pixels=16,
+        object_use_connected_components=True,
     ):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -183,6 +189,9 @@ class GAN(nn.Module):
         self.use_segmentation = use_segmentation
         self.seg_ignore_index = seg_ignore_index
         self.lambda_seg = lambda_seg
+        self.lambda_obj = lambda_obj
+        self.object_min_pixels = object_min_pixels
+        self.object_use_connected_components = object_use_connected_components
 
         self.net_G = UNetGenerator(use_segmentation=use_segmentation, num_seg_classes=num_seg_classes).init_weights().to(self.device)
         self.net_D = PatchDiscriminator(input_c=3).init_weights().to(self.device)
@@ -232,13 +241,57 @@ class GAN(nn.Module):
             return torch.tensor(0.0, device=self.L.device)
         return self.seg_criterion(self.pred_seg, self.seg) * self.lambda_seg
 
+    def _compute_object_recon_loss(self):
+        if (
+            self.lambda_obj <= 0
+            or not self.use_segmentation
+            or not hasattr(self, 'seg')
+            or self.seg is None
+        ):
+            return torch.tensor(0.0, device=self.L.device)
+
+        # scalar error map per pixel, keep gradient wrt fake_color
+        error_map = torch.mean(torch.abs(self.fake_color - self.ab), dim=1)
+        object_losses = []
+
+        seg_cpu = self.seg.detach().cpu().numpy().astype(np.int32)
+
+        for b in range(seg_cpu.shape[0]):
+            seg_np = seg_cpu[b]
+            err_b = error_map[b]
+            valid_classes = np.unique(seg_np)
+            valid_classes = valid_classes[valid_classes != self.seg_ignore_index]
+
+            for cls_id in valid_classes.tolist():
+                class_mask = (seg_np == cls_id).astype(np.uint8)
+                if class_mask.sum() < self.object_min_pixels:
+                    continue
+
+                if self.object_use_connected_components:
+                    num_labels, labels = cv2.connectedComponents(class_mask, connectivity=8)
+                    for comp_id in range(1, num_labels):
+                        comp_mask_np = (labels == comp_id)
+                        if int(comp_mask_np.sum()) < self.object_min_pixels:
+                            continue
+                        comp_mask = torch.from_numpy(comp_mask_np).to(err_b.device, dtype=torch.bool)
+                        object_losses.append(err_b[comp_mask].mean())
+                else:
+                    cls_mask = torch.from_numpy(class_mask.astype(bool)).to(err_b.device)
+                    object_losses.append(err_b[cls_mask].mean())
+
+        if not object_losses:
+            return torch.tensor(0.0, device=self.L.device)
+
+        return torch.stack(object_losses).mean() * self.lambda_obj
+
     def backward_G(self):
         fake_image = torch.cat([self.L, self.fake_color], dim=1)
         fake_preds = self.net_D(fake_image)
         self.loss_G_GAN = self.GANcriterion(fake_preds, True)
         self.loss_G_L1 = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
         self.loss_G_SEG = self._compute_seg_loss()
-        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_SEG
+        self.loss_G_OBJ = self._compute_object_recon_loss()
+        self.loss_G = self.loss_G_GAN + self.loss_G_L1 + self.loss_G_SEG + self.loss_G_OBJ
         self.loss_G.backward()
 
     def warmup_optimize(self):
@@ -248,7 +301,8 @@ class GAN(nn.Module):
         self.opt_G.zero_grad()
         self.loss_G_L1 = self.L1criterion(self.fake_color, self.ab) * self.lambda_L1
         self.loss_G_SEG = self._compute_seg_loss()
-        self.loss_G_warmup = self.loss_G_L1 + self.loss_G_SEG
+        self.loss_G_OBJ = self._compute_object_recon_loss()
+        self.loss_G_warmup = self.loss_G_L1 + self.loss_G_SEG + self.loss_G_OBJ
         self.loss_G_warmup.backward()
         self.opt_G.step()
 
@@ -265,6 +319,7 @@ class GAN(nn.Module):
         self.opt_G.zero_grad()
         self.backward_G()
         self.opt_G.step()
+
 
 
 def pretrain_discriminator(train_dl, gan_model, lr=2e-5, epochs=3):
