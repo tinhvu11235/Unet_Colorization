@@ -281,8 +281,7 @@ def train_from_checkpoint(path):
         raise ValueError(f"Invalid URL: {path}")
 
     checkpoint_url = path
-
-    checkpoint_file = "./model.pth"
+    checkpoint_file = "./model.pth"   
 
     response = requests.get(checkpoint_url, stream=True)
     if response.status_code == 200:
