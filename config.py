@@ -3,8 +3,8 @@ import torch
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 Config = {
-    "TRAIN_DATASET_PATH": "/kaggle/input/datasets/duynguynp9pou/coco-stuff-image-only/train2017",
-    "VAL_DATASET_PATH": "/kaggle/input/datasets/duynguynp9pou/coco-stuff-image-only/val2017",
+    "TRAIN_DATASET_PATH": "/kaggle/input/datasets/duynguynp9pou/coco-stuff-image-only/train2017/train2017",
+    "VAL_DATASET_PATH": "/kaggle/input/datasets/duynguynp9pou/coco-stuff-image-only/val2017/val2017",
     "TRAIN_SEG_PATH": "/kaggle/input/datasets/wxli408/cocostuff/stuffthingmaps_trainval2017/train2017",
     "VAL_SEG_PATH": "/kaggle/input/datasets/wxli408/cocostuff/stuffthingmaps_trainval2017/val2017",
     "NUM_SEG_CLASSES": 182,
