@@ -1,4 +1,3 @@
-
 import cv2
 import numpy as np
 import torch
@@ -67,14 +66,33 @@ class MLP(nn.Module):
 
 
 class WindowAttention(nn.Module):
-    def __init__(self, dim, num_heads, attn_dropout=0.0, proj_dropout=0.0):
+    def __init__(self, dim, window_size, num_heads, attn_dropout=0.0, proj_dropout=0.0):
         super().__init__()
         if dim % num_heads != 0:
             raise ValueError(f"dim ({dim}) must be divisible by num_heads ({num_heads})")
         self.dim = dim
+        self.window_size = (window_size, window_size)
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.scale = self.head_dim ** -0.5
+
+        self.relative_position_bias_table = nn.Parameter(
+            torch.zeros((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1), num_heads)
+        )
+
+        coords_h = torch.arange(self.window_size[0])
+        coords_w = torch.arange(self.window_size[1])
+        coords = torch.stack(torch.meshgrid([coords_h, coords_w], indexing='ij'))
+        coords_flatten = torch.flatten(coords, 1)
+        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()
+        relative_coords[:, :, 0] += self.window_size[0] - 1
+        relative_coords[:, :, 1] += self.window_size[1] - 1
+        relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
+        relative_position_index = relative_coords.sum(-1)
+        self.register_buffer("relative_position_index", relative_position_index)
+        
+        nn.init.trunc_normal_(self.relative_position_bias_table, std=.02)
 
         self.qkv = nn.Linear(dim, dim * 3)
         self.attn_drop = attn_dropout
@@ -82,15 +100,18 @@ class WindowAttention(nn.Module):
         self.proj_drop = nn.Dropout(proj_dropout)
 
     def forward(self, x):
-        # x: [B*nW, N, C]
         b_, n, c = x.shape
         qkv = self.qkv(x).reshape(b_, n, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
+        relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)
+        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
+        attn_mask = relative_position_bias.unsqueeze(0)
+
         x = F.scaled_dot_product_attention(
-            q,
-            k,
-            v,
+            q, k, v,
+            attn_mask=attn_mask,
             dropout_p=self.attn_drop if self.training else 0.0,
             scale=self.scale,
         )
@@ -101,7 +122,6 @@ class WindowAttention(nn.Module):
 
 
 def window_partition(x, window_size):
-    # x: [B, H, W, C]
     b, h, w, c = x.shape
     x = x.view(b, h // window_size, window_size, w // window_size, window_size, c)
     windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size * window_size, c)
@@ -133,15 +153,20 @@ class SwinBlock2D(nn.Module):
         self.shift_size = shift_size
 
         self.norm1 = nn.LayerNorm(dim)
-        self.attn = WindowAttention(dim, num_heads, attn_dropout=attn_dropout, proj_dropout=dropout)
+        self.attn = WindowAttention(
+            dim=dim, 
+            window_size=window_size, 
+            num_heads=num_heads, 
+            attn_dropout=attn_dropout, 
+            proj_dropout=dropout
+        )
         self.norm2 = nn.LayerNorm(dim)
         self.mlp = MLP(dim, mlp_ratio=mlp_ratio, dropout=dropout)
 
     def forward(self, x):
-        # x: [B, C, H, W]
         b, c, h, w = x.shape
         shortcut = x
-        x = x.permute(0, 2, 3, 1).contiguous()  # [B, H, W, C]
+        x = x.permute(0, 2, 3, 1).contiguous()
 
         pad_h = (self.window_size - h % self.window_size) % self.window_size
         pad_w = (self.window_size - w % self.window_size) % self.window_size
@@ -209,8 +234,6 @@ class SwinStage2D(nn.Module):
         return self.blocks(x)
 
 
-
-
 class SwinAdapter2D(nn.Module):
     def __init__(
         self,
@@ -238,6 +261,9 @@ class SwinAdapter2D(nn.Module):
         )
         self.expand = nn.Conv2d(attn_dim, in_channels, kernel_size=1, bias=False)
         self.expand_norm = nn.BatchNorm2d(in_channels)
+
+        nn.init.constant_(self.expand_norm.weight, 0)
+        nn.init.constant_(self.expand_norm.bias, 0)
 
     def forward(self, x):
         shortcut = x
@@ -370,7 +396,6 @@ def get_encoder_weights(model_path='model.pth'):
     encoder_prefixes = ('input_layer', 'enc', 'swin_enc3', 'swin_enc4')
     encoder_state_dict = {k: v for k, v in state_dict.items() if k.startswith(encoder_prefixes)}
     return encoder_state_dict
-
 
 
 def load_trained_model(model_path='model.pth'):
@@ -605,10 +630,7 @@ class GAN(nn.Module):
         self.opt_G.step()
 
 
-
 def pretrain_discriminator(train_dl, gan_model, lr=2e-5, epochs=3):
-    print("Pretraining Discriminator...")
-
     shuffled_train_dl = DataLoader(
         dataset=train_dl.dataset,
         batch_size=train_dl.batch_size,
@@ -638,12 +660,3 @@ def pretrain_discriminator(train_dl, gan_model, lr=2e-5, epochs=3):
                 running_loss += gan_model.loss_D.item()
                 real_loss += gan_model.loss_D_real.item()
                 fake_loss += gan_model.loss_D_fake.item()
-
-        print(
-            f"Epoch [{epoch + 1}/{epochs}], "
-            f"Running Loss: {running_loss / len(shuffled_train_dl):.4f}, "
-            f"Real Loss: {real_loss / len(shuffled_train_dl):.4f}, "
-            f"Fake Loss: {fake_loss / len(shuffled_train_dl):.4f}"
-        )
-
-    print("Pretraining for Discriminator is complete.")
